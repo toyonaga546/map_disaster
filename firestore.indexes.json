@@ -1,0 +1,15 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "postPrivate",
+      "fieldPath": "gps_samples",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "postPrivate",
+      "fieldPath": "token_hash",
+      "indexes": []
+    }
+  ]
+}

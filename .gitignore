@@ -5,3 +5,9 @@ data/
 !.env.example
 .DS_Store
 coverage/
+.credentials/
+*-firebase-adminsdk-*.json
+*service-account*.json
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*

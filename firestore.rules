@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // All reads/writes go through the Node.js API and its Admin SDK.
+    // IAM controls Admin SDK access; these rules block browser SDK access.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
