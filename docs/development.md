@@ -1,6 +1,6 @@
 # 開発とGitHubへの反映
 
-2026-10-27更新: データベースにFirebase Cloud Firestoreを採用。接続先は`adv-ex2-map-diseater` / `(default)` / `asia-northeast1`。`DB_DRIVER`でSQLiteと切り替える。現時点ではサーバー認証の設定と実通信での書き込み確認は未完了。画像はローカル保存を継続する。以下の初期方針のうちDB選定・将来移行先はこの決定を優先し、詳細は`firebase.md`を参照。
+2026-10-27更新: 投稿DBにFirebase Cloud Firestore、写真保存にCloud Storage for Firebaseを採用。Firestoreは`adv-ex2-map-diseater` / `(default)` / `asia-northeast1`。写真バケットは`adv-ex2-map-diseater.firebasestorage.app` / `US-EAST1`。`DB_DRIVER`と`STORAGE_DRIVER`でローカル保存と切り替える。サーバー認証・実環境での投稿と写真の保存/読み取り/削除を確認済み。以下の初期方針のうち保存先の選定はこの決定を優先し、詳細は`firebase.md`を参照。
 
 要件原文は requirements.md。最初の実装は授業向けの単一サーバープロトタイプとする。
 

@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,19 +8,27 @@ import exifr from 'exifr';
 import { distance, validPoint, gpsResult, priority } from './domain.js';
 import { compareImages } from './ai.js';
 import { createPostStore } from './post-store.js';
+import { createImageStore, localImageStore } from './image-store.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-export async function createApp(directory = path.join(root, 'data'), injectedStore) {
-  await mkdir(path.join(directory, 'images'), { recursive: true, mode: 0o700 });
+export async function createApp(directory = path.join(root, 'data'), injectedStore, injectedImages) {
   const store = injectedStore || await createPostStore(directory);
+  let images;
   const hash = token => createHash('sha256').update(token).digest();
   // Only expire old jobs: other servers may be processing recent posts.
   try {
+    images=injectedImages||await createImageStore(directory);
+    await images.check();
     for (const p of await store.list()) if (p.ai.status === 'pending' && Date.now()-Date.parse(p.created_at)>120000) {
       await store.patch(p.id,{ai:{status:'unavailable',result:'unknown',reason:'検証の待機時間を超過しました。'}});
     }
-  } catch (error) { await store.close(); throw error; }
-  const imagePath = id => path.join(directory, 'images', `${id}.jpg`);
+  } catch (error) { await store.close(); if(images)await images.close(); throw error; }
+  const legacyImages=localImageStore(directory);
+  const imageStoreFor=post=>{
+    if(!post.image_storage||post.image_storage==='local')return images.driver==='local'?images:legacyImages;
+    if(post.image_storage===images.driver)return images;
+    throw new Error('投稿写真に対応するストレージが設定されていません。');
+  };
   const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
   const fail = (status, message) => Object.assign(new Error(message), { status });
   async function body(req) {
@@ -74,13 +82,16 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           }
         } catch { /* Metadata absence must not prevent posting. */ }
         const id = randomUUID(), token = randomBytes(32).toString('base64url');
-        const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, gps:gpsResult(input,samples), metadata, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
+        const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
         const previous = (await store.listConsenting()).filter(p=>distance(p,post)<=100).sort((a,b)=>b.created_at.localeCompare(a.created_at))[0];
-        await writeFile(imagePath(id),processed,{mode:0o600});
+        await images.save(id,processed);
         try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true}); }
-        catch (e) { await unlink(imagePath(id)); throw e; }
+        catch (e) { await images.delete(id).catch(()=>console.error('投稿失敗後の写真の削除に失敗しました。')); throw e; }
         json(res,201,{ post, management_token:token });
-        const analysis = input.ai_consent === true ? compareImages(imagePath(id),previous?imagePath(previous.id):null) : Promise.resolve({status:'unavailable',result:'unknown',reason:'外部AIへの画像送信に同意されていません。'});
+        const analysis = input.ai_consent === true ? (async()=>{
+          try {return await compareImages(processed,previous&&process.env.OPENAI_API_KEY?await imageStoreFor(previous).read(previous.id):null);}
+          catch {return {status:'unavailable',result:'unknown',reason:'比較用写真を取得できません。'};}
+        })() : Promise.resolve({status:'unavailable',result:'unknown',reason:'外部AIへの画像送信に同意されていません。'});
         void analysis.then(ai=>store.patch(id,{ai})).catch(()=>console.error('AI結果の保存に失敗しました。'));
         return;
       }
@@ -97,7 +108,13 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         const token = String(req.headers.authorization || '').replace(/^Bearer /,'');
         const tokenHash=row.private?.token_hash;
         if (typeof tokenHash!=='string' || !/^[a-f0-9]{64}$/.test(tokenHash) || !timingSafeEqual(hash(token),Buffer.from(tokenHash,'hex'))) throw fail(403,'管理リンクが無効です。');
-        if (req.method === 'DELETE') { await store.delete(post.id); await unlink(imagePath(post.id)).catch(()=>{}); return json(res,200,{deleted:true}); }
+        if (req.method === 'DELETE') {
+          // Storage and Firestore are separate services. Do not report success
+          // if image deletion fails; retaining the post allows a retry.
+          await imageStoreFor(post).delete(post.id);
+          await store.delete(post.id);
+          return json(res,200,{deleted:true});
+        }
         const input = await body(req);
         if (typeof input.description !== 'string' || !input.description.trim() || input.description.length>2000) throw fail(400,'説明文は1〜2000文字です。');
         const updated=await store.patch(post.id,{description:input.description.trim(),updated_at:new Date().toISOString()});
@@ -106,18 +123,26 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') throw fail(405,'対応していない操作です。');
       const image = url.pathname.match(/^\/images\/([a-f0-9-]{36})\.jpg$/);
+      if(image){
+        const row=await store.get(image[1]);
+        if(!row)throw fail(404,'写真が見つかりません。');
+        let content;
+        try{content=await imageStoreFor(row.post).read(image[1]);}
+        catch(error){if(error.code==='ENOENT'||error.code===404)throw fail(404,'写真が見つかりません。');throw error;}
+        res.writeHead(200,{'Content-Type':'image/jpeg'});res.end(req.method==='HEAD'?undefined:content);return;
+      }
       const staticFiles = { '/':'public/index.html', '/app.js':'public/app.js', '/style.css':'public/style.css', '/vendor/leaflet.js':'node_modules/leaflet/dist/leaflet.js', '/vendor/leaflet.css':'node_modules/leaflet/dist/leaflet.css' };
-      const file = image ? imagePath(image[1]) : staticFiles[url.pathname] ? path.join(root,staticFiles[url.pathname]) : null;
+      const file = staticFiles[url.pathname] ? path.join(root,staticFiles[url.pathname]) : null;
       if (!file) throw fail(404,'見つかりません。');
       const content = await readFile(file).catch(()=>{throw fail(404,'見つかりません。');});
       const types={'.html':'text/html; charset=utf-8','.css':'text/css','.js':'text/javascript','.jpg':'image/jpeg'};
       res.writeHead(200,{'Content-Type':types[path.extname(file)]}); res.end(req.method==='HEAD'?undefined:content);
     } catch (e) { if (!res.headersSent) json(res,e.status || 500,{error:e.status?e.message:'サーバー処理に失敗しました。'}); else res.end(); }
   });
-  return {server,db:store.db,store};
+  return {server,db:store.db,store,images};
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const {server} = await createApp();
   const port = Number(process.env.PORT || 3000);
-  server.listen(port,process.env.HOST || '127.0.0.1',()=>console.log(`Local: http://localhost:${port}\nDatabase: ${process.env.DB_DRIVER || 'sqlite'}`));
+  server.listen(port,process.env.HOST || '127.0.0.1',()=>console.log(`Local: http://localhost:${port}\nDatabase: ${process.env.DB_DRIVER || 'sqlite'}\nImages: ${process.env.STORAGE_DRIVER || 'local'}`));
 }

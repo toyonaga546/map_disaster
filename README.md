@@ -13,14 +13,14 @@ npm start
 
 http://localhost:3000 を開きます。スマートフォンなど別端末から使う場合は、HTTPS対応の環境に配置してください。GPSは利用者の許可が必要です。
 
-Firestoreにも対応しています。`DB_DRIVER=firestore`で保存先を切り替えます。プロジェクトは`adv-ex2-map-diseater`（東京）です。サーバー認証と実接続確認の手順は[Firebase接続](docs/firebase.md)を参照してください。画像は引き続きローカル保存です。未設定時はSQLiteで起動します。
+投稿は`DB_DRIVER=firestore`、写真は`STORAGE_DRIVER=firebase`でFirebaseへ保存します。プロジェクトは`adv-ex2-map-diseater`です。サーバー認証と実接続確認の手順は[Firebase接続](docs/firebase.md)を参照してください。未設定時はSQLite・ローカル画像保存で起動します。
 
 ## 実装済み
 
 - 地図の移動・拡大縮小・現在地と投稿ピン・投稿詳細
 - 写真と説明文の投稿、地図クリックまたは緯度経度での場所指定
 - 最大30秒のGPS取得、サーバーでの距離評価と非公開履歴の保存
-- サーバー時刻・写真・投稿内容のSQLite/ファイル保存
+- サーバー時刻・投稿内容のFirestore保存と写真のCloud Storage保存（SQLite・ローカル保存にも切り替え可能）
 - ハッシュ化した管理トークンを使う専用リンクで説明文編集・投稿削除
 - 同一地点（100m以内）の写真履歴、最新3件と整合性上位3件の重複排除
 - EXIFの撮影日時・カメラ・編集ソフトの確認、日時・撮影地点の矛盾に関する注意表示
@@ -40,7 +40,11 @@ AI評価は詳細画面の「評価を更新」で再取得できます。Google
 
 ## 保存と運用
 
-SQLiteモードでは`data/posts.sqlite`と`data/images/`が永続データです。Firestoreモードでは投稿と非公開GPS情報をFirestoreへ保存しますが、画像は`data/images/`に残ります。ローカルデータはGit管理対象外です。サーバー移行時はサーバーを停止して`data/`全体を安全にバックアップしてください。画像用の永続ディスクが必要で、Vercelへの直接配置には対応していません。画像のクラウド保存は次段階です。
+Firestoreモードでは投稿と非公開GPS情報をFirestoreへ、Firebase Storageモードでは写真を`adv-ex2-map-diseater.firebasestorage.app`の`posts/{投稿ID}.jpg`へ保存します。写真はEXIF除去後にアップロードし、APIサーバーが読み出して配信します。バケットを公開したり、永続ダウンロードトークンを発行したりしません。投稿削除時には写真も削除します。
+
+FirestoreとStorageの両方を使う構成では、新規投稿の写真やDBをローカルディスクへ保存しません。Node.jsサーバーの実行環境は別途必要で、Firebase HostingやVercelへの配置設定は含んでいません。
+
+SQLite・ローカル画像保存を選んだ場合は`data/posts.sqlite`と`data/images/`が永続データです。これらはGit管理対象外です。切り替え前の写真は保存先情報に従って表示します。既存投稿のローカル写真は`npm run migrate:images`で対象を確認し、`npm run migrate:images -- --apply`で移行できます。移行ではローカル原本を削除しません。
 
 本番公開前にはHTTPS、投稿頻度・容量制限、モデレーション、運用者による削除手順、GPS履歴の保持期間と削除方針、バックアップ、ページング、実機GPS検証を追加してください。現状はlocalhost待受の授業用です。GPSとEXIFは利用者側で変更でき、真偽の証明には使えません。判定距離・同一地点・優先順位の基準は暫定です。
 

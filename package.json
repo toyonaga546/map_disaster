@@ -11,7 +11,9 @@
     "dev": "node --experimental-sqlite --env-file-if-exists=.env --watch src/server.js",
     "test": "node --experimental-sqlite --test",
     "check:upload": "node scripts/check-upload.js",
-    "check:firebase": "node --env-file-if-exists=.env scripts/check-firebase.js"
+    "check:firebase": "node --env-file-if-exists=.env scripts/check-firebase.js",
+    "check:storage": "node --env-file-if-exists=.env scripts/check-storage.js",
+    "migrate:images": "node --experimental-sqlite --env-file-if-exists=.env scripts/migrate-images.js"
   },
   "dependencies": {
     "exifr": "7.1.3",

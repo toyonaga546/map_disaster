@@ -4,7 +4,7 @@ export async function compareImages(currentPath, previousPath, request = fetch) 
   if (!process.env.OPENAI_API_KEY) return { status: 'unavailable', result: 'unknown', reason: 'AIのAPIキーが設定されていません。' };
   if (!previousPath) return { status: 'unavailable', result: 'unknown', reason: '同一地点にAI送信への同意がある比較用の過去写真がありません。' };
   try {
-    const images = await Promise.all([currentPath, previousPath].map(async path => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${(await readFile(path)).toString('base64')}`, detail: 'low' } })));
+    const images = await Promise.all([currentPath, previousPath].map(async input => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${(Buffer.isBuffer(input)?input:await readFile(input)).toString('base64')}`, detail: 'low' } })));
     const response = await request('https://api.openai.com/v1/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(45000),
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },

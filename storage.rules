@@ -1,0 +1,10 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Only the server's Admin SDK accesses objects. Images are served through
+    // /images/:id.jpg after checking that the corresponding post exists.
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

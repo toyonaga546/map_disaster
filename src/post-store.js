@@ -1,8 +1,10 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
 
 // Keep the public API separate from private GPS records and token hashes.
 export async function createSqliteStore(directory) {
+  await mkdir(directory,{recursive:true,mode:0o700});
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(path.join(directory, 'posts.sqlite'));
   db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS posts (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, payload TEXT NOT NULL, gps_private TEXT NOT NULL, ai_consent INTEGER NOT NULL DEFAULT 0)');
