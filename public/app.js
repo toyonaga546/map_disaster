@@ -38,6 +38,18 @@ function hazardDetails(post) {
 }
 function gpsLabel(p) {return p.gps.status==='consistent'?'GPS：矛盾なし':p.gps.status==='attention'?'GPS：注意が必要':'GPS：判定不可';}
 function aiLabel(p) {return p.ai.status==='pending'?'AI：未検証':p.ai.status!=='complete'?'AI：判定不可':({consistent:'AI：一致の可能性が高い',inconsistent:'AI：不一致の可能性が高い',unknown:'AI：判断困難'}[p.ai.result]);}
+// Only positive findings get a feed tag: "no record" says little on its own.
+function provenanceTag(p) {
+  const v=p.provenance;
+  if(!v)return '';
+  if(v.status!=='not_found')return `<span class="tag attention">${escape(v.label)}</span>`;
+  return v.camera_note?'<span class="tag unknown">カメラ情報なし</span>':'';
+}
+function provenanceHTML(p) {
+  const v=p.provenance;
+  if(!v)return '<section class="verification-block"><strong>AI生成の記録 · 確認していない</strong><p>この機能の追加前の投稿のため、確認していません。</p></section>';
+  return `<section class="verification-block"><strong>⚑ AI生成の記録 · ${escape(v.label)}</strong>${v.signals.length?`<p>${v.signals.map(escape).join('<br>')}</p>`:''}<p>${escape(v.reason)}</p>${v.camera_note?`<p>${escape(v.camera_note)}</p>`:''}<small>写真に埋め込まれた来歴情報（IPTC・C2PAなど）を投稿時に読み取った結果です。画像の内容からAI生成かどうかを判定するものではありません。</small></section>`;
+}
 const DIRECTIONS={0:'北',90:'東',180:'南',270:'西'};
 function streetviewHTML(p) {
   const s=p.streetview;
@@ -52,7 +64,7 @@ function renderFeed() {
   const query=$('search').value.trim().toLowerCase();
   const visible=posts.filter(p=>p.description.toLowerCase().includes(query));
   $('count').textContent=posts.length;
-  $('feed').innerHTML=visible.length?visible.map(p=>`<button class="report-card" data-post="${p.id}"><img src="${p.image_url}" alt="投稿写真" loading="lazy"><time>${date(p.created_at)}</time><p>${escape(p.description.slice(0,85))}</p><div class="tags"><span class="tag unknown">${hazardDisplay(p).label}</span><span class="tag ${p.gps.status}">${gpsLabel(p)}</span><span class="tag unknown">${aiLabel(p)}</span></div></button>`).join(''):`<div class="empty"><div class="empty-icon">⌖</div><h3>${query?'該当する投稿がありません':'まだ投稿がありません'}</h3><p>${query?'検索する言葉を変更してください。':'あなたの確認した状況が、<br>地域の情報につながります。'}</p></div>`;
+  $('feed').innerHTML=visible.length?visible.map(p=>`<button class="report-card" data-post="${p.id}"><img src="${p.image_url}" alt="投稿写真" loading="lazy"><time>${date(p.created_at)}</time><p>${escape(p.description.slice(0,85))}</p><div class="tags"><span class="tag unknown">${hazardDisplay(p).label}</span><span class="tag ${p.gps.status}">${gpsLabel(p)}</span><span class="tag unknown">${aiLabel(p)}</span>${provenanceTag(p)}</div></button>`).join(''):`<div class="empty"><div class="empty-icon">⌖</div><h3>${query?'該当する投稿がありません':'まだ投稿がありません'}</h3><p>${query?'検索する言葉を変更してください。':'あなたの確認した状況が、<br>地域の情報につながります。'}</p></div>`;
   markers.clearLayers();
   for (const p of visible) {
     const { symbol, level, label } = hazardDisplay(p);
@@ -125,7 +137,7 @@ async function showDetail(id){
     const {post:p,history,priority}=await api(`/api/posts/${id}`);activeDetail=id;
     const preferred=history.filter(p=>priority.includes(p.id)), others=history.filter(p=>!priority.includes(p.id));
     const historyHTML=list=>list.map(h=>`<button class="history-item" data-history="${h.id}"><img src="${h.image_url}" alt="過去の投稿写真" loading="lazy"><span>${date(h.created_at)}${h.id===id?' · 表示中':''}<br>${escape(h.description.slice(0,65))}</span></button>`).join('');
-    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真"><p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
+    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真"><p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}${provenanceHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
     if(!$('detail').open)$('detail').showModal();
   }catch(e){toast(e.message);}
 }
