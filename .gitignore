@@ -15,3 +15,4 @@ functions/node_modules/
 functions/src/
 functions/public/
 .firebase/
+functions/deploy-secrets.json

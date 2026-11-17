@@ -23,7 +23,10 @@ for name in OPENAI_API_KEY GOOGLE_MAPS_API_KEY; do
   secrets+=("$name")
 done
 
-# functions/index.jsが、ここに挙げた名前のSecretだけをFunctionへ結び付ける。
+# functions/index.jsが、このファイルに挙げた名前のSecretだけをFunctionへ結び付ける。
+# 環境変数ではFirebase CLIの解析プロセスに渡らないため、ファイルにする。
+node -e 'console.log(JSON.stringify(process.argv.slice(1).filter(Boolean)))' ${secrets[@]+"${secrets[@]}"} > functions/deploy-secrets.json
+echo "Functionへ結び付けるSecret: $(cat functions/deploy-secrets.json)"
 # --force: コンテナイメージの古いものを自動で削除するクリーンアップポリシーを設定する（未設定だとデプロイがエラー終了する）。
-DEPLOY_SECRETS="$(IFS=,; echo "${secrets[*]:-}")" npx --yes firebase-tools deploy --only functions,hosting --force --project "$PROJECT"
+npx --yes firebase-tools deploy --only functions,hosting --force --project "$PROJECT"
 echo "公開しました: https://${PROJECT}.web.app"

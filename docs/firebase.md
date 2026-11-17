@@ -76,7 +76,7 @@ npx firebase-tools login
 `scripts/deploy.sh`は、確認後に`.env`の`OPENAI_API_KEY`と`GOOGLE_MAPS_API_KEY`（設定がある場合のみ）をSecret Managerへ登録し、`firebase deploy --only functions,hosting`を実行する。`.env`は読み取るだけで、`functions/`に置かないためデプロイされない（Functionsは自身のソース内の`.env`を環境変数として公開してしまうので、`functions/`を別ディレクトリにしている）。デプロイ前に`scripts/prepare-functions.js`が`src/`と`public/`を`functions/`へコピーする。コピーは生成物でGit管理しない。
 
 - 投稿APIは写真保存までを応答前に行う。AI比較はレスポンス後にCPUが絞られるため行わず、Firestoreの`posts/{id}`作成をきっかけに`analyzePost`が実行する。写真とストリートビュー画像はStorageから読み出す。
-- `firebase deploy`を手動で実行する場合は、Secretを結び付けるため環境変数`DEPLOY_SECRETS=OPENAI_API_KEY,GOOGLE_MAPS_API_KEY`（存在するものだけ）が必要。未指定ならSecretなしで配備され、AIとストリートビューは「APIキー未設定」になる。
+- Secretの結び付けは`functions/deploy-secrets.json`（`deploy.sh`が作る。Git管理しない）に載った名前だけ行う。Firebase CLIは関数の解析プロセスに任意の環境変数を渡さないため、環境変数では指定できない。このファイルがないまま`firebase deploy`を実行すると、Secretなしで配備され、AIとストリートビューは「APIキー未設定」になる。
 - FunctionのサービスアカウントにFirestoreとStorageの権限が必要（デフォルトのサービスアカウントが十分な権限を持つ場合が多い）。
 - Functions、Hosting、Secret Managerの利用にはBlazeプランが必要。
 - 認証なしで公開し、台数は最大3台に制限している。投稿頻度の制限はないため、OpenAIとストリートビューの利用料金に上限を設定すること。
