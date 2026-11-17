@@ -15,10 +15,12 @@ export async function createSqliteStore(directory) {
     async listConsenting() { return db.prepare('SELECT payload FROM posts WHERE ai_consent=1').all().map(r=>JSON.parse(r.payload)); },
     async get(id) { const row=db.prepare('SELECT * FROM posts WHERE id=?').get(id); return row ? {post:JSON.parse(row.payload),private:{token_hash:row.token_hash,gps_samples:JSON.parse(row.gps_private),ai_consent:!!row.ai_consent}} : null; },
     async create(post, privateData) { db.prepare('INSERT INTO posts (id,token_hash,payload,gps_private,ai_consent) VALUES (?,?,?,?,?)').run(post.id,privateData.token_hash,JSON.stringify(post),JSON.stringify(privateData.gps_samples),privateData.ai_consent?1:0); },
-    async patch(id, fields) {
+    async patch(id, fields, matches = () => true) {
       const row=db.prepare('SELECT payload FROM posts WHERE id=?').get(id);
       if (!row) return null;
-      const post={...JSON.parse(row.payload),...fields};
+      const current=JSON.parse(row.payload);
+      if (!matches(current)) return null;
+      const post={...current,...fields};
       db.prepare('UPDATE posts SET payload=? WHERE id=?').run(JSON.stringify(post),id);
       return post;
     },
@@ -48,12 +50,14 @@ export function firestoreStore(db, close=async()=>{}) {
       batch.create(privatePosts.doc(post.id),privateData);
       await batch.commit();
     },
-    async patch(id,fields) {
+    async patch(id,fields,matches = () => true) {
       return db.runTransaction(async transaction=>{
         const ref=posts.doc(id), snapshot=await transaction.get(ref);
         if (!snapshot.exists) return null;
+        const current=snapshot.data();
+        if (!matches(current)) return null;
         transaction.update(ref,fields);
-        return {...snapshot.data(),...fields};
+        return {...current,...fields};
       });
     },
     async delete(id) {

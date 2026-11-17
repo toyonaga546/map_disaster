@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import exifr from 'exifr';
 import { distance, validPoint, gpsResult, priority } from './domain.js';
 import { analyzePost } from './analysis.js';
+import { assessHazard, unavailableHazard } from './hazard.js';
 import { fetchStreetView, streetviewVariants, HEADINGS } from './streetview.js';
 import { createPostStore } from './post-store.js';
 import { createImageStore, localImageStore } from './image-store.js';
@@ -33,12 +34,28 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
   // Idempotent: only a post still waiting for analysis is processed.
   async function runAnalysis(id) {
     const row = await store.get(id);
-    if (!row || row.post.ai?.status !== 'pending') return null;
-    const ai = await analyzePost({ store, imageStoreFor, post: row.post, consent: row.private?.ai_consent === true });
-    await store.patch(id,{ai});
+    if (!row) return null;
+    // The photo is read back from storage so this can run in a separate process; request_id keeps a redelivered trigger from overwriting newer results.
+    const [ai] = await Promise.all([
+      row.post.ai?.status === 'pending'
+        ? analyzePost({ store, imageStoreFor, post: row.post, consent: row.private?.ai_consent === true }).then(async result => { await store.patch(id,{ai:result}); return result; })
+        : null,
+      queueHazard(row.post, () => imageStoreFor(row.post).read(row.post.id))
+    ]);
     return ai;
   }
   const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
+  function queueHazard(post, loadPhoto) {
+    if (post.hazard?.status !== 'pending') return Promise.resolve();
+    return Promise.resolve().then(loadPhoto)
+      .then(photo => assessHazard(post.description, photo))
+      .catch(() => unavailableHazard)
+      .then(hazard => store.patch(post.id, { hazard }, current => current.hazard?.request_id === post.hazard.request_id))
+      .catch(() => console.error('被災状況の解析結果を保存できませんでした。'));
+  }
+  const pendingHazard = () => process.env.OPENAI_API_KEY
+    ? { status:'pending', request_id:randomUUID(), started_at:new Date().toISOString() }
+    : unavailableHazard;
   const fail = (status, message) => Object.assign(new Error(message), { status });
   async function body(req) {
     const chunks = []; let size = 0;
@@ -107,6 +124,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           }
         }
         const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
+        if (input.hazard_consent === true) post.hazard = pendingHazard();
         try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true}); }
         catch (e) {
           await images.delete(id).catch(()=>console.error('投稿失敗後の写真の削除に失敗しました。'));
@@ -114,7 +132,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           throw e;
         }
         json(res,201,{ post, management_token:token });
-        // Serverless hosts stop background work after the response, so a trigger calls runAnalysis instead.
+        // Serverless hosts stop background work after the response, so a trigger calls runAnalysis (AI comparison and hazard) instead.
         if (!deferAnalysis) void runAnalysis(id).catch(()=>console.error('AI結果の保存に失敗しました。'));
         return;
       }
@@ -141,8 +159,13 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         }
         const input = await body(req);
         if (typeof input.description !== 'string' || !input.description.trim() || input.description.length>2000) throw fail(400,'説明文は1〜2000文字です。');
-        const updated=await store.patch(post.id,{description:input.description.trim(),updated_at:new Date().toISOString()});
+        const changes = {description:input.description.trim(),updated_at:new Date().toISOString()};
+        if (post.hazard) changes.hazard = pendingHazard();
+        const updated=await store.patch(post.id,changes);
         if (!updated) throw fail(404,'投稿が見つかりません。');
+        // Serverless hosts stop background work after the response, so wait for the result there.
+        const hazardJob = queueHazard(updated, () => imageStoreFor(updated).read(updated.id));
+        if (deferAnalysis) await hazardJob;
         return json(res,200,updated);
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') throw fail(405,'対応していない操作です。');
