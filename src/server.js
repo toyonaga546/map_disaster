@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import exifr from 'exifr';
 import { distance, validPoint, gpsResult, priority } from './domain.js';
 import { compareImages } from './ai.js';
+import { assessHazard, unavailableHazard } from './hazard.js';
 import { fetchStreetView } from './streetview.js';
 import { createPostStore } from './post-store.js';
 import { createImageStore, localImageStore } from './image-store.js';
@@ -31,6 +32,17 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
     throw new Error('投稿写真に対応するストレージが設定されていません。');
   };
   const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
+  function queueHazard(post, loadPhoto) {
+    if (post.hazard?.status !== 'pending') return;
+    void Promise.resolve().then(loadPhoto)
+      .then(photo => assessHazard(post.description, photo))
+      .catch(() => unavailableHazard)
+      .then(hazard => store.patch(post.id, { hazard }, current => current.hazard?.request_id === post.hazard.request_id))
+      .catch(() => console.error('被災状況の解析結果を保存できませんでした。'));
+  }
+  const pendingHazard = () => process.env.OPENAI_API_KEY
+    ? { status:'pending', request_id:randomUUID(), started_at:new Date().toISOString() }
+    : unavailableHazard;
   const fail = (status, message) => Object.assign(new Error(message), { status });
   async function body(req) {
     const chunks = []; let size = 0;
@@ -93,6 +105,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           catch { view = { info:null, bytes:null }; streetview = { status:'unavailable', reason:'ストリートビュー画像を保存できませんでした。' }; }
         }
         const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
+        if (input.hazard_consent === true) post.hazard = pendingHazard();
         const previous = (await store.listConsenting()).filter(p=>distance(p,post)<=100).sort((a,b)=>b.created_at.localeCompare(a.created_at))[0];
         try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true}); }
         catch (e) {
@@ -101,6 +114,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           throw e;
         }
         json(res,201,{ post, management_token:token });
+        queueHazard(post, () => processed);
         const analysis = input.ai_consent === true ? (async()=>{
           try {return await compareImages(processed,previous&&process.env.OPENAI_API_KEY?await imageStoreFor(previous).read(previous.id):null,undefined,view.bytes);}
           catch {return {status:'unavailable',result:'unknown',reason:'比較用写真を取得できません。'};}
@@ -131,8 +145,11 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         }
         const input = await body(req);
         if (typeof input.description !== 'string' || !input.description.trim() || input.description.length>2000) throw fail(400,'説明文は1〜2000文字です。');
-        const updated=await store.patch(post.id,{description:input.description.trim(),updated_at:new Date().toISOString()});
+        const changes = {description:input.description.trim(),updated_at:new Date().toISOString()};
+        if (post.hazard) changes.hazard = pendingHazard();
+        const updated=await store.patch(post.id,changes);
         if (!updated) throw fail(404,'投稿が見つかりません。');
+        queueHazard(updated, () => imageStoreFor(updated).read(updated.id));
         return json(res,200,updated);
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') throw fail(405,'対応していない操作です。');
