@@ -113,7 +113,7 @@ $('post-form').onsubmit=async event=>{
     imageData=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('写真を読み込めません。'));reader.readAsDataURL(file);});
     stopGPS();
     const freshSamples=samples.filter(s=>Date.now()-s.recorded_at<=120000);
-    const result=await api('/api/posts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:$('description').value,latitude:Number($('latitude').value),longitude:Number($('longitude').value),samples:freshSamples,image:imageData,ai_consent:true,hazard_consent:$('hazard-consent').checked})});
+    const result=await api('/api/posts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:$('description').value,latitude:Number($('latitude').value),longitude:Number($('longitude').value),samples:freshSamples,image:imageData,ai_consent:true,hazard_consent:true})});
     const link=`${location.origin}/#manage=${result.post.id}.${result.management_token}`;
     $('compose').close();posts.unshift(result.post);renderFeed();await showDetail(result.post.id);
     if(!$('detail').open){$('detail-content').textContent='投稿は保存されました。詳細は後ほど開き直してください。';$('detail').showModal();}
