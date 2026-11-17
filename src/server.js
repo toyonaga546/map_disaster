@@ -10,6 +10,7 @@ import { analyzePost } from './analysis.js';
 import { assessHazard, unavailableHazard } from './hazard.js';
 import { fetchStreetView, streetviewVariants, HEADINGS } from './streetview.js';
 import { createPostStore } from './post-store.js';
+import { detectGenerated } from './provenance.js';
 import { createImageStore, localImageStore } from './image-store.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -108,6 +109,8 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
             metadata = { status:'確認済み', taken_at:taken, camera:[exif.Make,exif.Model].filter(Boolean).join(' '), software:String(exif.Software || '').slice(0,200), location:validPoint(exif)?'記録あり（正確な座標は非公開）':'確認できない', warnings };
           }
         } catch { /* Metadata absence must not prevent posting. */ }
+        // Must read the original bytes: re-encoding above strips these records.
+        const provenance = detectGenerated(raw, { camera: Boolean(metadata.camera) });
         const id = randomUUID(), token = randomBytes(32).toString('base64url');
         // Only the post location is sent to Google; a failure must not block posting.
         let view = await Promise.resolve().then(()=>fetchView({latitude:input.latitude,longitude:input.longitude})).catch(()=>null);
@@ -123,7 +126,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
             view = { info:null, images:null }; streetview = { status:'unavailable', reason:'ストリートビュー画像を保存できませんでした。' };
           }
         }
-        const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
+        const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, provenance, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
         if (input.hazard_consent === true) post.hazard = pendingHazard();
         try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true}); }
         catch (e) {

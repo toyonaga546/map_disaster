@@ -98,6 +98,18 @@ function hazardDetails(post) {
 }
 function gpsLabel(p) {return p.gps.status==='consistent'?'GPS：矛盾なし':p.gps.status==='attention'?'GPS：注意が必要':'GPS：判定不可';}
 function aiLabel(p) {return p.ai.status==='pending'?'AI：未検証':p.ai.status!=='complete'?'AI：判定不可':({consistent:'AI：一致の可能性が高い',inconsistent:'AI：不一致の可能性が高い',unknown:'AI：判断困難'}[p.ai.result]);}
+// Only positive findings get a feed tag: "no record" says little on its own.
+function provenanceTag(p) {
+  const v=p.provenance;
+  if(!v)return '';
+  if(v.status!=='not_found')return `<span class="tag attention">${escape(v.label)}</span>`;
+  return v.camera_note?'<span class="tag unknown">カメラ情報なし</span>':'';
+}
+function provenanceHTML(p) {
+  const v=p.provenance;
+  if(!v)return '<section class="verification-block"><strong>AI生成の記録 · 確認していない</strong><p>この機能の追加前の投稿のため、確認していません。</p></section>';
+  return `<section class="verification-block"><strong>⚑ AI生成の記録 · ${escape(v.label)}</strong>${v.signals.length?`<p>${v.signals.map(escape).join('<br>')}</p>`:''}<p>${escape(v.reason)}</p>${v.camera_note?`<p>${escape(v.camera_note)}</p>`:''}<small>写真に埋め込まれた来歴情報（IPTC・C2PAなど）を投稿時に読み取った結果です。画像の内容からAI生成かどうかを判定するものではありません。</small></section>`;
+}
 const DIRECTIONS={0:'北',90:'東',180:'南',270:'西'};
 function streetviewHTML(p) {
   const s=p.streetview;
@@ -112,7 +124,7 @@ function renderFeed() {
   const query=$('search').value.trim().toLowerCase();
   const visible=posts.filter(p=>p.description.toLowerCase().includes(query));
   $('count').textContent=posts.length;
-  $('feed').innerHTML=visible.length?visible.map(p=>`<button class="report-card" data-post="${p.id}"><img src="${p.image_url}" alt="投稿写真" loading="lazy"><time>${date(p.created_at)}</time><p>${escape(p.description.slice(0,85))}</p><div class="tags"><span class="tag unknown">${hazardDisplay(p).label}</span><span class="tag ${p.gps.status}">${gpsLabel(p)}</span><span class="tag unknown">${aiLabel(p)}</span></div></button>`).join(''):`<div class="empty"><div class="empty-icon">⌖</div><h3>${query?'該当する投稿がありません':'まだ投稿がありません'}</h3><p>${query?'検索する言葉を変更してください。':'あなたの確認した状況が、<br>地域の情報につながります。'}</p></div>`;
+  $('feed').innerHTML=visible.length?visible.map(p=>`<button class="report-card" data-post="${p.id}"><img src="${p.image_url}" alt="投稿写真" loading="lazy"><time>${date(p.created_at)}</time><p>${escape(p.description.slice(0,85))}</p><div class="tags"><span class="tag unknown">${hazardDisplay(p).label}</span><span class="tag ${p.gps.status}">${gpsLabel(p)}</span><span class="tag unknown">${aiLabel(p)}</span>${provenanceTag(p)}</div></button>`).join(''):`<div class="empty"><div class="empty-icon">⌖</div><h3>${query?'該当する投稿がありません':'まだ投稿がありません'}</h3><p>${query?'検索する言葉を変更してください。':'あなたの確認した状況が、<br>地域の情報につながります。'}</p></div>`;
   markers.clearLayers();
   for (const p of visible) {
     const { symbol, level, label } = hazardDisplay(p);
