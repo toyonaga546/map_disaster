@@ -3,10 +3,44 @@
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
-  "storage": { "rules": "storage.rules" },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "hosting": {
+    "public": "hosting",
+    "rewrites": [
+      {
+        "source": "**",
+        "function": {
+          "functionId": "app",
+          "region": "asia-northeast1"
+        }
+      }
+    ]
+  },
   "emulators": {
-    "firestore": { "port": 8080 },
-    "ui": { "enabled": false },
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": false
+    },
     "singleProjectMode": true
-  }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "node scripts/prepare-functions.js"
+      ]
+    }
+  ]
 }

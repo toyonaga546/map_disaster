@@ -6,13 +6,13 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import exifr from 'exifr';
 import { distance, validPoint, gpsResult, priority } from './domain.js';
-import { compareImages } from './ai.js';
+import { analyzePost } from './analysis.js';
 import { fetchStreetView, streetviewVariants, HEADINGS } from './streetview.js';
 import { createPostStore } from './post-store.js';
 import { createImageStore, localImageStore } from './image-store.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-export async function createApp(directory = path.join(root, 'data'), injectedStore, injectedImages, fetchView = fetchStreetView) {
+export async function createApp(directory = path.join(root, 'data'), injectedStore, injectedImages, fetchView = fetchStreetView, { deferAnalysis = false } = {}) {
   const store = injectedStore || await createPostStore(directory);
   let images;
   const hash = token => createHash('sha256').update(token).digest();
@@ -30,14 +30,23 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
     if(post.image_storage===images.driver)return images;
     throw new Error('投稿写真に対応するストレージが設定されていません。');
   };
+  // Idempotent: only a post still waiting for analysis is processed.
+  async function runAnalysis(id) {
+    const row = await store.get(id);
+    if (!row || row.post.ai?.status !== 'pending') return null;
+    const ai = await analyzePost({ store, imageStoreFor, post: row.post, consent: row.private?.ai_consent === true });
+    await store.patch(id,{ai});
+    return ai;
+  }
   const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
   const fail = (status, message) => Object.assign(new Error(message), { status });
   async function body(req) {
     const chunks = []; let size = 0;
-    for await (const chunk of req) { size += chunk.length; if(size > 12_000_000) throw fail(413,'送信データが大きすぎます。写真は8MB以下にしてください。'); chunks.push(chunk); }
+    // Cloud Functions has already consumed the stream and keeps the bytes in rawBody.
+    for await (const chunk of Buffer.isBuffer(req.rawBody) ? [req.rawBody] : req) { size += chunk.length; if(size > 12_000_000) throw fail(413,'送信データが大きすぎます。写真は8MB以下にしてください。'); chunks.push(chunk); }
     try { return JSON.parse(Buffer.concat(chunks)); } catch { throw fail(400,'JSON形式が不正です。'); }
   }
-  const server = http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
     res.setHeader('Cache-Control','no-store');
@@ -98,7 +107,6 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           }
         }
         const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
-        const previous = (await store.listConsenting()).filter(p=>distance(p,post)<=100).sort((a,b)=>b.created_at.localeCompare(a.created_at))[0];
         try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true}); }
         catch (e) {
           await images.delete(id).catch(()=>console.error('投稿失敗後の写真の削除に失敗しました。'));
@@ -106,11 +114,8 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           throw e;
         }
         json(res,201,{ post, management_token:token });
-        const analysis = input.ai_consent === true ? (async()=>{
-          try {return await compareImages(processed,previous&&process.env.OPENAI_API_KEY?await imageStoreFor(previous).read(previous.id):null,undefined,view.images??[]);}
-          catch {return {status:'unavailable',result:'unknown',reason:'比較用写真を取得できません。'};}
-        })() : Promise.resolve({status:'unavailable',result:'unknown',reason:'外部AIへの画像送信に同意されていません。'});
-        void analysis.then(ai=>store.patch(id,{ai})).catch(()=>console.error('AI結果の保存に失敗しました。'));
+        // Serverless hosts stop background work after the response, so a trigger calls runAnalysis instead.
+        if (!deferAnalysis) void runAnalysis(id).catch(()=>console.error('AI結果の保存に失敗しました。'));
         return;
       }
       const match = url.pathname.match(/^\/api\/posts\/([a-f0-9-]{36})$/);
@@ -158,8 +163,8 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
       const types={'.html':'text/html; charset=utf-8','.css':'text/css','.js':'text/javascript','.jpg':'image/jpeg'};
       res.writeHead(200,{'Content-Type':types[path.extname(file)]}); res.end(req.method==='HEAD'?undefined:content);
     } catch (e) { if (!res.headersSent) json(res,e.status || 500,{error:e.status?e.message:'サーバー処理に失敗しました。'}); else res.end(); }
-  });
-  return {server,db:store.db,store,images};
+  };
+  return {server:http.createServer(handler),handler,db:store.db,store,images,runAnalysis};
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const {server} = await createApp();
