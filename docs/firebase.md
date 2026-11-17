@@ -62,7 +62,26 @@ npx --yes firebase-tools deploy --only firestore --project adv-ex2-map-diseater
 npx --yes firebase-tools deploy --only storage --project adv-ex2-map-diseater
 ```
 
-`firebase.json`はFirestoreとStorageのルール用。現在のNode.jsサーバーをFirebase Hostingへそのままデプロイする設定ではない。今回の設定では既存バケットを使い、課金プランやHostingの設定は変更していない。Cloud Storageのプラン要件は[公式説明](https://firebase.google.com/docs/storage/faqs-storage-changes-announced-sept-2024)を参照。
+Cloud Storageのプラン要件は[公式説明](https://firebase.google.com/docs/storage/faqs-storage-changes-announced-sept-2024)を参照。
+
+## Cloud FunctionsとFirebase Hostingへのデプロイ
+
+Node.jsサーバーはCloud Functions（第2世代）の`app`（`asia-northeast1`）で動かし、Firebase Hostingの`**`リライトで`https://adv-ex2-map-diseater.web.app`から公開する。ページ、API、写真を同じFunctionが配信し、Hosting自体は静的ファイルを持たない。Functionsではローカルディスクが永続しないため、`DB_DRIVER=firestore`と`STORAGE_DRIVER=firebase`に固定する（`src/functions-runtime.js`）。
+
+```sh
+npx firebase-tools login
+./scripts/deploy.sh
+```
+
+`scripts/deploy.sh`は、確認後に`.env`の`OPENAI_API_KEY`と`GOOGLE_MAPS_API_KEY`（設定がある場合のみ）をSecret Managerへ登録し、`firebase deploy --only functions,hosting`を実行する。`.env`は読み取るだけで、`functions/`に置かないためデプロイされない（Functionsは自身のソース内の`.env`を環境変数として公開してしまうので、`functions/`を別ディレクトリにしている）。デプロイ前に`scripts/prepare-functions.js`が`src/`と`public/`を`functions/`へコピーする。コピーは生成物でGit管理しない。
+
+- 投稿APIは写真保存までを応答前に行う。AI比較はレスポンス後にCPUが絞られるため行わず、Firestoreの`posts/{id}`作成をきっかけに`analyzePost`が実行する。写真とストリートビュー画像はStorageから読み出す。
+- `firebase deploy`を手動で実行する場合は、Secretを結び付けるため環境変数`DEPLOY_SECRETS=OPENAI_API_KEY,GOOGLE_MAPS_API_KEY`（存在するものだけ）が必要。未指定ならSecretなしで配備され、AIとストリートビューは「APIキー未設定」になる。
+- FunctionのサービスアカウントにFirestoreとStorageの権限が必要（デフォルトのサービスアカウントが十分な権限を持つ場合が多い）。
+- Functions、Hosting、Secret Managerの利用にはBlazeプランが必要。
+- 認証なしで公開し、台数は最大3台に制限している。投稿頻度の制限はないため、OpenAIとストリートビューの利用料金に上限を設定すること。
+- HostingからFunctionへのリクエストは60秒で打ち切られる。投稿処理（ストリートビュー4枚の取得を含む）はこの範囲に収める。
+- 配備後の動作確認は未実施。テストはモックとローカルで、Functionsの実行環境、Hostingのリライト、Firestoreトリガーは実環境で検証していない。
 
 ## 動作検証の範囲
 
