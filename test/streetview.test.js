@@ -4,7 +4,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
-import { bearing } from '../src/domain.js';
 import { fetchStreetView } from '../src/streetview.js';
 import { compareImages } from '../src/ai.js';
 import { createApp } from '../src/server.js';
@@ -18,15 +17,7 @@ const withKey = async run => {
 const imageResponse = (type = 'image/jpeg', body = jpeg) => ({ ok: true, headers: { get: () => type }, arrayBuffer: async () => body });
 const metaResponse = value => ({ ok: true, json: async () => value });
 
-test('方位角は北・東・南・西を正しく返す', () => {
-  const origin = { latitude: 0, longitude: 0 };
-  assert.ok(Math.abs(bearing(origin, { latitude: 1, longitude: 0 }) - 0) < 0.01);
-  assert.ok(Math.abs(bearing(origin, { latitude: 0, longitude: 1 }) - 90) < 0.01);
-  assert.ok(Math.abs(bearing(origin, { latitude: -1, longitude: 0 }) - 180) < 0.01);
-  assert.ok(Math.abs(bearing(origin, { latitude: 0, longitude: -1 }) - 270) < 0.01);
-});
-
-test('ストリートビュー取得：成功時は撮影地点から投稿地点の方向を向く', async () => {
+test('ストリートビュー取得：成功時は東西南北の4方向を取得する', async () => {
   const urls = [];
   const result = await withKey(() => fetchStreetView(point, async url => {
     urls.push(new URL(url));
@@ -34,12 +25,13 @@ test('ストリートビュー取得：成功時は撮影地点から投稿地�
   }));
   assert.equal(result.info.status, 'available');
   assert.equal(result.info.captured, '2023-05');
-  assert.equal(result.bytes.length, jpeg.length);
+  assert.deepEqual(result.images.map(i => i.heading), [0, 90, 180, 270]);
+  assert.ok(result.images.every(i => i.bytes.length === jpeg.length));
   assert.ok(result.info.distance > 30 && result.info.distance < 60);
   assert.equal(urls[0].pathname.endsWith('/metadata'), true);
-  assert.equal(urls[1].searchParams.get('pano'), 'pano1');
-  assert.equal(urls[1].searchParams.get('heading'), '90');
-  assert.equal(urls[1].searchParams.get('return_error_code'), 'true');
+  assert.equal(urls.length, 5);
+  assert.deepEqual(urls.slice(1).map(u => u.searchParams.get('heading')).sort(), ['0', '180', '270', '90']);
+  assert.ok(urls.slice(1).every(u => u.searchParams.get('pano') === 'pano1' && u.searchParams.get('fov') === '90' && u.searchParams.get('return_error_code') === 'true'));
 });
 
 test('ストリートビュー取得：キー未設定・画像なし・API失敗・画像でない応答は取得不可になり例外を出さない', async () => {
@@ -51,27 +43,29 @@ test('ストリートビュー取得：キー未設定・画像なし・API失�
     assert.equal((await fetchStreetView(point, async () => { throw new Error('timeout'); })).info.status, 'unavailable');
     let calls = 0;
     const notImage = await fetchStreetView(point, async () => ++calls === 1 ? metaResponse({ status: 'OK', pano_id: 'p', location: { lat: 35.68, lng: 139.76 } }) : imageResponse('text/html'));
-    assert.equal(notImage.info.status, 'unavailable'); assert.equal(notImage.bytes, null);
+    assert.equal(notImage.info.status, 'unavailable'); assert.equal(notImage.images, null);
   });
 });
 
-test('AI比較：ストリートビュー画像だけでも送信し、過去写真があれば両方を送る', async () => {
+test('AI比較：ストリートビュー4方向だけでも送信し、過去写真があれば合わせて送る', async () => {
   const old = process.env.OPENAI_API_KEY; process.env.OPENAI_API_KEY = 'test-only';
   try {
     const sent = [];
     const request = async (url, options) => { sent.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ result: 'consistent', reason: 'ストリートビューと建物が共通しています。' }) } }] }) }; };
-    assert.equal((await compareImages(jpeg, null, request, jpeg)).result, 'consistent');
+    const views = [0, 90, 180, 270].map(heading => ({ heading, bytes: jpeg }));
+    assert.equal((await compareImages(jpeg, null, request, views.slice(0, 1))).result, 'consistent');
     assert.equal(sent[0].messages[1].content.length, 2);
     assert.match(sent[0].messages[0].content, /Street View/);
-    await compareImages(jpeg, jpeg, request, jpeg);
-    assert.equal(sent[1].messages[1].content.length, 3);
-    assert.equal((await compareImages(jpeg, null, request, null)).status, 'unavailable');
+    await compareImages(jpeg, jpeg, request, views);
+    assert.equal(sent[1].messages[1].content.length, 6);
+    assert.match(sent[1].messages[0].content, /facing north.*facing east.*facing south.*facing west/);
+    assert.equal((await compareImages(jpeg, null, request, [])).status, 'unavailable');
   } finally { if (old) process.env.OPENAI_API_KEY = old; else delete process.env.OPENAI_API_KEY; }
 });
 
 test('投稿にストリートビュー画像を保存・配信し、削除時に消す', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'disaster-streetview-'));
-  let view = { info: { status: 'available', captured: '2023-05', distance: 12, copyright: '© Google' }, bytes: jpeg };
+  let view = { info: { status: 'available', captured: '2023-05', distance: 12, copyright: '© Google' }, images: [0, 90, 180, 270].map(heading => ({ heading, bytes: jpeg })) };
   const app = await createApp(dir, undefined, undefined, async () => { if (view instanceof Error) throw view; return view; });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
@@ -84,18 +78,22 @@ test('投稿にストリートビュー画像を保存・配信し、削除時�
     assert.equal(created.status, 201);
     const { post: p, management_token: token } = created.body;
     assert.equal(p.streetview.status, 'available');
-    assert.equal(p.streetview.image_url, `/images/${p.id}.streetview.jpg`);
-    const image = await fetch(base + p.streetview.image_url);
-    assert.equal(image.status, 200); assert.equal(image.headers.get('content-type'), 'image/jpeg');
-    assert.deepEqual(Buffer.from(await image.arrayBuffer()), jpeg);
+    assert.deepEqual(p.streetview.images.map(i => i.heading), [0, 90, 180, 270]);
+    for (const { heading, image_url } of p.streetview.images) {
+      assert.equal(image_url, `/images/${p.id}.streetview-${heading}.jpg`);
+      const image = await fetch(base + image_url);
+      assert.equal(image.status, 200); assert.equal(image.headers.get('content-type'), 'image/jpeg');
+      assert.deepEqual(Buffer.from(await image.arrayBuffer()), jpeg);
+    }
+    assert.equal((await fetch(base + `/images/${p.id}.streetview-45.jpg`)).status, 404);
     assert.equal((await fetch(base + `/api/posts/${p.id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` } })).status, 200);
-    assert.equal((await fetch(base + p.streetview.image_url)).status, 404);
+    for (const { image_url } of p.streetview.images) assert.equal((await fetch(base + image_url)).status, 404);
     assert.equal((await fetch(base + p.image_url)).status, 404);
 
-    view = { info: { status: 'unavailable', reason: '投稿地点の50m以内にストリートビューがありません。' }, bytes: null };
+    view = { info: { status: 'unavailable', reason: '投稿地点の50m以内にストリートビューがありません。' }, images: null };
     const none = (await post()).body.post;
     assert.equal(none.streetview.status, 'unavailable');
-    assert.equal((await fetch(base + `/images/${none.id}.streetview.jpg`)).status, 404);
+    assert.equal((await fetch(base + `/images/${none.id}.streetview-0.jpg`)).status, 404);
 
     view = new Error('boom');
     const failed = await post();

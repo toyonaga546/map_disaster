@@ -3,13 +3,6 @@ export function distance(a, b) {
   const x = Math.sin(rad(b.latitude - a.latitude) / 2) ** 2 + Math.cos(rad(a.latitude)) * Math.cos(rad(b.latitude)) * Math.sin(rad(b.longitude - a.longitude) / 2) ** 2;
   return 6371000 * 2 * Math.asin(Math.sqrt(Math.min(1, x)));
 }
-export function bearing(from, to) {
-  const rad = n => n * Math.PI / 180;
-  const dLng = rad(to.longitude - from.longitude);
-  const y = Math.sin(dLng) * Math.cos(rad(to.latitude));
-  const x = Math.cos(rad(from.latitude)) * Math.sin(rad(to.latitude)) - Math.sin(rad(from.latitude)) * Math.cos(rad(to.latitude)) * Math.cos(dLng);
-  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-}
 export function validPoint(p) {
   return p && Number.isFinite(p.latitude) && Math.abs(p.latitude) <= 90 && Number.isFinite(p.longitude) && Math.abs(p.longitude) <= 180;
 }

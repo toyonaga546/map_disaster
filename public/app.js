@@ -14,11 +14,15 @@ const markers=L.layerGroup().addTo(map);
 const icon=L.divIcon({className:'map-pin',html:'<span>•</span>',iconSize:[30,30],iconAnchor:[15,30]});
 function gpsLabel(p) {return p.gps.status==='consistent'?'GPS：矛盾なし':p.gps.status==='attention'?'GPS：注意が必要':'GPS：判定不可';}
 function aiLabel(p) {return p.ai.status==='pending'?'AI：未検証':p.ai.status!=='complete'?'AI：判定不可':({consistent:'AI：一致の可能性が高い',inconsistent:'AI：不一致の可能性が高い',unknown:'AI：判断困難'}[p.ai.result]);}
+const DIRECTIONS={0:'北',90:'東',180:'南',270:'西'};
 function streetviewHTML(p) {
   const s=p.streetview;
   if(!s)return '<section class="verification-block"><strong>ストリートビュー · 未保存</strong><p>この投稿にはストリートビュー画像を保存していません。下のリンクから確認できます。</p></section>';
   if(s.status!=='available')return `<section class="verification-block"><strong>ストリートビュー · 取得できませんでした</strong><p>${escape(s.reason)}</p></section>`;
-  return `<section class="verification-block"><strong>◫ 投稿写真とストリートビューの見比べ</strong><div class="compare"><figure><a href="${p.image_url}" target="_blank" rel="noopener noreferrer"><img src="${p.image_url}" alt="投稿写真" loading="lazy"></a><figcaption>投稿写真</figcaption></figure><figure><a href="${s.image_url}" target="_blank" rel="noopener noreferrer"><img src="${s.image_url}" alt="投稿地点周辺のストリートビュー" loading="lazy"></a><figcaption>ストリートビュー<br>${escape(s.captured||'撮影時期不明')}頃 · 約${Number(s.distance)}m離れた地点から投稿地点の方向</figcaption></figure></div><small>${escape(s.copyright||'© Google')} · 画像をタップすると拡大します。撮影時期が古い場合や、災害で景色が変わっている場合があります。AIが判断できなくても、建物・道路・看板などをご自身の目で見比べてください。</small></section>`;
+  const copyright=escape(s.copyright||'© Google');
+  if(s.images?.length)return `<section class="verification-block"><strong>◫ ストリートビュー（東西南北の4方向）</strong><p class="muted">上の投稿写真と同じ建物・道路・看板がないか、4方向から探してください。</p><div class="compare">${s.images.map(v=>`<figure><a href="${v.image_url}" target="_blank" rel="noopener noreferrer"><img src="${v.image_url}" alt="ストリートビュー（${DIRECTIONS[v.heading]}向き）" loading="lazy"></a><figcaption>${DIRECTIONS[v.heading]}向き</figcaption></figure>`).join('')}</div><small>${copyright} · ${escape(s.captured||'撮影時期不明')}頃 · 約${Number(s.distance)}m離れた地点から撮影 · 画像をタップすると拡大します。撮影時期が古い場合や、災害で景色が変わっている場合があります。AIが判断できなくても、ご自身の目で見比べてください。</small></section>`;
+  // Posts saved before the four-direction capture have a single image.
+  return `<section class="verification-block"><strong>◫ 投稿写真とストリートビューの見比べ</strong><div class="compare"><figure><a href="${p.image_url}" target="_blank" rel="noopener noreferrer"><img src="${p.image_url}" alt="投稿写真" loading="lazy"></a><figcaption>投稿写真</figcaption></figure><figure><a href="${s.image_url}" target="_blank" rel="noopener noreferrer"><img src="${s.image_url}" alt="投稿地点周辺のストリートビュー" loading="lazy"></a><figcaption>ストリートビュー<br>${escape(s.captured||'撮影時期不明')}頃 · 約${Number(s.distance)}m離れた地点から投稿地点の方向</figcaption></figure></div><small>${copyright} · 画像をタップすると拡大します。撮影時期が古い場合や、災害で景色が変わっている場合があります。AIが判断できなくても、建物・道路・看板などをご自身の目で見比べてください。</small></section>`;
 }
 function renderFeed() {
   const query=$('search').value.trim().toLowerCase();

@@ -2,11 +2,12 @@ import path from 'node:path';
 import {mkdir,readFile,writeFile,unlink} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 
-// variant 'streetview' is the Street View image saved next to the post photo.
+// variants 'streetview-<heading>' are the Street View images saved next to the post photo.
+// Plain 'streetview' is the single image saved by earlier versions.
 function filename(id,variant='photo') {
   if(!/^[a-f0-9-]{36}$/.test(id))throw new Error('Invalid image ID');
   if(variant==='photo')return `${id}.jpg`;
-  if(variant==='streetview')return `${id}.streetview.jpg`;
+  if(/^streetview(-(0|90|180|270))?$/.test(variant))return `${id}.${variant}.jpg`;
   throw new Error('Invalid image variant');
 }
 
