@@ -136,6 +136,18 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         if (!deferAnalysis) void runAnalysis(id).catch(()=>console.error('AI結果の保存に失敗しました。'));
         return;
       }
+      const voteMatch = url.pathname.match(/^\/api\/posts\/([a-f0-9-]{36})\/vote$/);
+      if (voteMatch && req.method === 'PUT') {
+        const input = await body(req);
+        if (!input || !['genuine', 'false'].includes(input.choice) ||
+            typeof input.voter !== 'string' || !/^[a-f0-9]{64}$/.test(input.voter)) {
+          throw fail(400, '投票データが不正です。');
+        }
+        const id = voteMatch[1];
+        const totals = await store.vote(id, hash(id + ':' + input.voter).toString('hex'), input.choice);
+        if (!totals) throw fail(404, '投稿が見つかりません。');
+        return json(res, 200, totals);
+      }
       const match = url.pathname.match(/^\/api\/posts\/([a-f0-9-]{36})$/);
       if (match) {
         const row = await store.get(match[1]);

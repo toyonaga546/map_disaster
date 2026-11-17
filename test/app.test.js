@@ -134,3 +134,28 @@ test('被災状況は同意時のみ写真と説明文から推定し、編集�
     else process.env.OPENAI_API_KEY = originalKey;
   }
 });
+
+test('写真の真偽投票を集計し、同じブラウザの投票は上書きする', async () => {
+  const created = await request('/api/posts', 'POST', await fixture());
+  assert.equal(created.status, 201);
+  const { post, management_token } = created.body;
+  const route = '/api/posts/' + post.id;
+  const voter = 'a'.repeat(64), otherVoter = 'b'.repeat(64);
+  const vote = (key, choice) => request(route + '/vote', 'PUT', { voter: key, choice });
+  try {
+    assert.equal((await request(route)).body.post.photo_votes, undefined);
+    assert.equal((await vote(voter, 'unknown')).status, 400);
+    assert.equal((await vote('bad', 'false')).status, 400);
+    assert.deepEqual(await vote(voter, 'genuine'), { status: 200, body: { genuine: 1, false: 0 } });
+    assert.deepEqual((await vote(voter, 'genuine')).body, { genuine: 1, false: 0 });
+    await Promise.all([vote(voter, 'false'), vote(otherVoter, 'genuine')]);
+    const detail = await request(route);
+    assert.deepEqual(detail.body.post.photo_votes, { genuine: 1, false: 1 });
+    assert.ok(!JSON.stringify(detail.body).includes(voter));
+    assert.deepEqual((await request('/api/posts')).body.find(p => p.id === post.id).photo_votes, { genuine: 1, false: 1 });
+  } finally {
+    await request(route, 'DELETE', null, management_token);
+  }
+  assert.equal((await vote(voter, 'genuine')).status, 404);
+  assert.equal(app.db.prepare('SELECT count(*) AS total FROM photo_votes WHERE post_id=?').get(post.id).total, 0);
+});
