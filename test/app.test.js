@@ -75,3 +75,62 @@ test('AI画像比較の成功・不正応答・タイムアウト相当の失敗
     assert.equal((await compareImages(file,null)).status,'unavailable');
   }finally{if(old)process.env.OPENAI_API_KEY=old;else delete process.env.OPENAI_API_KEY;}
 });
+
+test('被災状況は同意時のみ写真と説明文から推定し、編集前の結果は破棄する', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.OPENAI_API_KEY;
+  const calls = [];
+  process.env.OPENAI_API_KEY = 'test-only';
+  globalThis.fetch = (url, options) => {
+    if (url !== 'https://api.openai.com/v1/chat/completions') return originalFetch(url, options);
+    return new Promise(resolve => calls.push({ input: JSON.parse(options.body), resolve }));
+  };
+  const waitFor = async predicate => {
+    for (let i = 0; i < 100; i++) {
+      const value = await predicate();
+      if (value) return value;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.fail('解析結果の待機時間を超過しました');
+  };
+  const reply = (call, category) => call.resolve({ ok: true, json: async () => ({
+    choices: [{ message: { content: JSON.stringify({ category, level: 'caution', reason: '投稿と写真に道路の被害が見られます。' }) } }]
+  }) });
+  try {
+    const input = await fixture();
+    const skipped = await request('/api/posts', 'POST', input);
+    assert.equal(skipped.body.post.hazard, undefined);
+    assert.equal(calls.length, 0);
+
+    const created = await request('/api/posts', 'POST', { ...input, hazard_consent: true });
+    const { post, management_token: token } = created.body;
+    assert.equal(post.hazard.status, 'pending');
+    const route = '/api/posts/' + post.id;
+    const first = await waitFor(() => calls[0]);
+    assert.equal(first.input.messages[1].content[0].text, input.description);
+    assert.match(first.input.messages[1].content[1].image_url.url, /^data:image\/jpeg;base64,/);
+
+    const edited = await request(route, 'PATCH', { description: '道路に倒木があります。' }, token);
+    assert.equal(edited.body.hazard.status, 'pending');
+    const second = await waitFor(() => calls[1]);
+    assert.equal(second.input.messages[1].content[0].text, '道路に倒木があります。');
+    reply(first, 'flood');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal((await request(route)).body.post.hazard.status, 'pending');
+
+    reply(second, 'road');
+    const result = await waitFor(async () => {
+      const { body } = await request('/api/posts');
+      const hazard = body.find(p => p.id === post.id).hazard;
+      return hazard.status === 'complete' && hazard;
+    });
+    assert.equal(result.category, 'road');
+    assert.equal(result.level, 'caution');
+    await request(route, 'DELETE', null, token);
+    await request('/api/posts/' + skipped.body.post.id, 'DELETE', null, skipped.body.management_token);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalKey;
+  }
+});
