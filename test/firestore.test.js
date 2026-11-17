@@ -91,3 +91,14 @@ test('Firestore利用時も投稿APIはGPS履歴・トークンを公開せず�
     const deleted=await fetch(base+`/api/posts/${post.id}`,{method:'DELETE',headers:{'Content-Type':'application/json',Authorization:`Bearer ${management_token}`}});assert.equal(deleted.status,200);assert.equal(await store.get(post.id),null);
   } finally {await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});}
 });
+
+test('Firestoreで同じ投票を変更しても票数は増えず、公開投稿には集計のみ残る', async () => {
+  const db = memoryFirestore(), store = firestoreStore(db);
+  await store.create({ id: 'photo' }, { token_hash: 'test' });
+  await Promise.all([store.vote('photo', 'voter1', 'false'), store.vote('photo', 'voter2', 'genuine')]);
+  assert.deepEqual(await store.vote('photo', 'voter1', 'genuine'), { genuine: 2, false: 0 });
+  assert.deepEqual(await store.list(), [{ id: 'photo', photo_votes: { genuine: 2, false: 0 } }]);
+  await store.delete('photo');
+  assert.equal(await store.vote('photo', 'voter1', 'false'), null);
+  assert.equal(db.data.has('postPrivate/photo'), false);
+});

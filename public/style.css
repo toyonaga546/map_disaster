@@ -6,6 +6,10 @@
 .hazard-caution{--hazard-color:#a45c08}
 .hazard-unknown{--hazard-color:#616d76}
 .hazard-marker{display:grid;place-items:center;border:3px solid var(--hazard-color);border-radius:50%;background:#fff;color:#243e37;font-weight:800;font-size:14px;box-shadow:0 2px 6px #0004}
+.hazard-marker-flagged{position:absolute;border:0;background:none;box-shadow:none;border-radius:0}
+.hazard-marker-flagged::before{content:"";position:absolute;inset:4px;border:3px solid var(--hazard-color);border-radius:3px;background:#fff;box-shadow:0 2px 6px #0004;transform:rotate(45deg)}
+.hazard-marker-flagged span{position:relative}
+.false-vote-diamond{display:inline-block;width:8px;height:8px;border:2px solid #616d76;transform:rotate(45deg)}
 .legend .pin-dot{background:var(--hazard-color)}
 .legend i{margin-right:4px}
 .legend .blue-dot{margin-left:0}

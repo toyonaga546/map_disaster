@@ -30,6 +30,66 @@ function hazardDisplay(post) {
   return { symbol:'？', level:'unknown', label, reason:hazard?.reason };
 }
 
+function reachesVoteThreshold(count, total) {
+  return total > 0 && count * 4 >= total;
+}
+
+function photoVoteSummary(votes = {}) {
+  const genuine = votes.genuine || 0;
+  const fake = votes.false || 0;
+  const total = genuine + fake;
+  if (!total) return '投票はまだありません。';
+  const percent = count => (100 * count / total).toLocaleString('ja-JP', { maximumFractionDigits: 2 }) + '％';
+  const labels = [];
+  if (reachesVoteThreshold(genuine, total)) labels.push('<strong>この画像は「真」との判定あり（25％以上）</strong>');
+  if (reachesVoteThreshold(fake, total)) labels.push('<strong>この画像は「偽」との判定あり（25％以上）</strong>');
+  return (labels.length === 2 ? '<strong>真偽の判断が分かれています</strong><br>' : '') + labels.join('<br>') + '<br>真 ' + percent(genuine) + '（' + genuine +
+    '票） · 偽 ' + percent(fake) + '（' + fake + '票）';
+}
+
+function photoVoteSection(post) {
+  return '<section class="verification-block" id="photo-vote"><strong>投稿写真の真偽投票</strong>' +
+    '<p id="photo-vote-summary" aria-live="polite">' + photoVoteSummary(post.photo_votes) + '</p>' +
+    '<p>現地を確認した方は、写真が投稿時点の現地の状況を伝えているか投票できます。</p>' +
+    '<label class="consent"><input type="checkbox" id="photo-vote-witness"><span>現地の状況を実際に確認しました</span></label>' +
+    '<div class="field-row"><button type="button" class="secondary" data-photo-vote="genuine">真と判断</button>' +
+    '<button type="button" class="secondary" data-photo-vote="false">偽と判断</button></div>' +
+    '<small>現地を確認したという自己申告に基づく集計です。同じブラウザから投票し直すと前の票を置き換えます。</small></section>';
+}
+
+async function submitPhotoVote(choice, panel, id) {
+  if (!panel.querySelector('#photo-vote-witness').checked) {
+    toast('現地を確認したことにチェックを入れてください。');
+    return;
+  }
+  const buttons = panel.querySelectorAll('[data-photo-vote]');
+  buttons.forEach(button => button.disabled = true);
+  try {
+    const key = 'disaster-map-voter';
+    let voter = localStorage.getItem(key);
+    if (!voter) {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      voter = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem(key, voter);
+    }
+    const votes = await api('/api/posts/' + id + '/vote', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voter, choice })
+    });
+    panel.querySelector('#photo-vote-summary').innerHTML = photoVoteSummary(votes);
+    const post = posts.find(post => post.id === id);
+    if (post) {
+      post.photo_votes = votes;
+      renderFeed();
+    }
+    toast('投票を保存しました。');
+  } catch (error) {
+    toast(error.message || '投票を保存できませんでした。');
+  } finally {
+    buttons.forEach(button => button.disabled = false);
+  }
+}
+
 function hazardDetails(post) {
   const { label, reason } = hazardDisplay(post);
   return '<section class="verification-block"><strong>被災状況のAI推定 · ' + label + '</strong>' +
@@ -68,13 +128,16 @@ function renderFeed() {
   markers.clearLayers();
   for (const p of visible) {
     const { symbol, level, label } = hazardDisplay(p);
+    const { genuine = 0, false: fake = 0 } = p.photo_votes || {};
+    const flagged = reachesVoteThreshold(fake, genuine + fake);
+    const markerLabel = flagged ? label + ' · 偽と判断した票が25％以上' : label;
     const icon = L.divIcon({
-      className: 'hazard-marker hazard-' + level,
+      className: 'hazard-marker hazard-' + level + (flagged ? ' hazard-marker-flagged' : ''),
       html: '<span aria-hidden="true">' + symbol + '</span>',
       iconSize: [32, 32], iconAnchor: [16, 32], tooltipAnchor: [0, -28]
     });
-    L.marker([p.latitude, p.longitude], { icon, title: label })
-      .bindTooltip(label, { direction:'top' })
+    L.marker([p.latitude, p.longitude], { icon, title: markerLabel })
+      .bindTooltip(markerLabel, { direction:'top' })
       .on('click', () => showDetail(p.id)).addTo(markers);
   }
 }
@@ -137,11 +200,19 @@ async function showDetail(id){
     const {post:p,history,priority}=await api(`/api/posts/${id}`);activeDetail=id;
     const preferred=history.filter(p=>priority.includes(p.id)), others=history.filter(p=>!priority.includes(p.id));
     const historyHTML=list=>list.map(h=>`<button class="history-item" data-history="${h.id}"><img src="${h.image_url}" alt="過去の投稿写真" loading="lazy"><span>${date(h.created_at)}${h.id===id?' · 表示中':''}<br>${escape(h.description.slice(0,65))}</span></button>`).join('');
-    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真"><p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}${provenanceHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
+    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真">${photoVoteSection(p)}<p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
     if(!$('detail').open)$('detail').showModal();
   }catch(e){toast(e.message);}
 }
-$('detail-content').onclick=e=>{const item=e.target.closest('[data-history]');if(item)showDetail(item.dataset.history,true);};
+$('detail-content').onclick = event => {
+  const vote = event.target.closest('[data-photo-vote]');
+  if (vote) {
+    void submitPhotoVote(vote.dataset.photoVote, vote.closest('#photo-vote'), activeDetail);
+    return;
+  }
+  const item = event.target.closest('[data-history]');
+  if (item) showDetail(item.dataset.history, true);
+};
 $('refresh-detail').onclick=()=>{if($('detail-content').querySelector('.management-link')&&!confirm('管理リンクは再表示できません。保管済みの場合はOKを押して評価を更新してください。'))return;if(activeDetail)showDetail(activeDetail);};
 let manager=null;
 async function management(){
