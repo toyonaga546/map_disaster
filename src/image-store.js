@@ -2,9 +2,12 @@ import path from 'node:path';
 import {mkdir,readFile,writeFile,unlink} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 
-function filename(id) {
+// variant 'streetview' is the Street View image saved next to the post photo.
+function filename(id,variant='photo') {
   if(!/^[a-f0-9-]{36}$/.test(id))throw new Error('Invalid image ID');
-  return `${id}.jpg`;
+  if(variant==='photo')return `${id}.jpg`;
+  if(variant==='streetview')return `${id}.streetview.jpg`;
+  throw new Error('Invalid image variant');
 }
 
 export function localImageStore(directory) {
@@ -12,28 +15,28 @@ export function localImageStore(directory) {
   return {
     driver:'local',
     async check(){},
-    async save(id,bytes){await mkdir(folder,{recursive:true,mode:0o700});await writeFile(path.join(folder,filename(id)),bytes,{mode:0o600,flag:'wx'});},
-    async read(id){return readFile(path.join(folder,filename(id)));},
-    async delete(id){try{await unlink(path.join(folder,filename(id)));}catch(error){if(error.code!=='ENOENT')throw error;}},
+    async save(id,bytes,variant){await mkdir(folder,{recursive:true,mode:0o700});await writeFile(path.join(folder,filename(id,variant)),bytes,{mode:0o600,flag:'wx'});},
+    async read(id,variant){return readFile(path.join(folder,filename(id,variant)));},
+    async delete(id,variant){try{await unlink(path.join(folder,filename(id,variant)));}catch(error){if(error.code!=='ENOENT')throw error;}},
     async close(){}
   };
 }
 
 export function firebaseImageStore(bucket,close=async()=>{}) {
-  const file=id=>bucket.file(`posts/${filename(id)}`);
+  const file=(id,variant)=>bucket.file(`posts/${filename(id,variant)}`);
   return {
     driver:'firebase',
     async check(){await bucket.getMetadata();},
-    async save(id,bytes){
-      await file(id).save(bytes,{
+    async save(id,bytes,variant){
+      await file(id,variant).save(bytes,{
         resumable:false,
         validation:'crc32c',
         preconditionOpts:{ifGenerationMatch:0},
         metadata:{contentType:'image/jpeg',cacheControl:'private, no-store'}
       });
     },
-    async read(id){const [bytes]=await file(id).download();return bytes;},
-    async delete(id){await file(id).delete({ignoreNotFound:true});},
+    async read(id,variant){const [bytes]=await file(id,variant).download();return bytes;},
+    async delete(id,variant){await file(id,variant).delete({ignoreNotFound:true});},
     close
   };
 }
