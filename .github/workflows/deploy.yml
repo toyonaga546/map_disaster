@@ -1,0 +1,64 @@
+name: Deploy
+# mainへのマージ（=push）でCloud FunctionsとFirebase Hostingへデプロイする。
+# 手動実行（Actionsタブの Run workflow）も可能。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# デプロイが同時に走らないよう直列化する。実行中のデプロイは中断しない。
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FIREBASE_PROJECT_ID: adv-ex2-map-diseater
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - run: npm ci
+      - run: npm test
+      - run: npm ci
+        working-directory: functions
+
+      # FIREBASE_SERVICE_ACCOUNT: サービスアカウントのJSONキー全文（GitHubのRepository secret）
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      # scripts/deploy.sh と同じ手順。値が設定されたSecretだけSecret Managerへ登録し、Functionへ結び付ける。
+      - name: Register secrets
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          secrets=()
+          for name in OPENAI_API_KEY GOOGLE_MAPS_API_KEY; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "$name は未設定のため渡しません。"
+              continue
+            fi
+            printf '%s' "$value" | npx --yes firebase-tools functions:secrets:set "$name" --data-file - --force --project "$FIREBASE_PROJECT_ID"
+            secrets+=("$name")
+          done
+          node -e 'console.log(JSON.stringify(process.argv.slice(1).filter(Boolean)))' ${secrets[@]+"${secrets[@]}"} > functions/deploy-secrets.json
+          echo "Functionへ結び付けるSecret: $(cat functions/deploy-secrets.json)"
+
+      - name: Deploy to Firebase
+        run: npx --yes firebase-tools deploy --only functions,hosting --force --project "$FIREBASE_PROJECT_ID"
