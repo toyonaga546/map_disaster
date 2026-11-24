@@ -1,3 +1,6 @@
+import { postLifecycle } from './lifecycle.js';
+import { groupIncidents, incidentTimeline, distanceMeters } from './incidents.js';
+
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date = value => new Date(value).toLocaleString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
@@ -90,6 +93,21 @@ async function submitPhotoVote(choice, panel, id) {
   }
 }
 
+function provenanceHTML(post) {
+  const result = post.provenance;
+  const labels = {
+    ai_generated:'AI生成の記録あり',ai_edited:'AI編集・生成素材の使用記録あり',
+    verified:'生成・編集情報を確認',not_present:'識別情報なし',
+    invalid:'検証できず（整合性エラー）',untrusted:'発行元未確認',unavailable:'確認失敗'
+  };
+  return '<section class="verification-block"><strong>画像の生成元 · ' +
+    (labels[result?.status] || '未検証') + '</strong><p>' +
+    escape(result?.reason || 'この投稿は生成元の検証に対応する前に保存されています。') + '</p>' +
+    (result?.issuer ? '<p>署名の発行元 ' + escape(result.issuer) + '</p>' : '') +
+    (result?.checked_at ? '<small>投稿時の元画像を検証 · ' + date(result.checked_at) + '</small><br>' : '') +
+    '<small>識別情報がなくてもAI生成の可能性はあります。撮影場所・日時や投稿内容の真偽は、現地情報と合わせて確認してください。</small></section>';
+}
+
 function hazardDetails(post) {
   const { label, reason } = hazardDisplay(post);
   return '<section class="verification-block"><strong>被災状況のAI推定 · ' + label + '</strong>' +
@@ -108,32 +126,107 @@ function streetviewHTML(p) {
   // Posts saved before the four-direction capture have a single image.
   return `<section class="verification-block"><strong>◫ 投稿写真とストリートビューの見比べ</strong><div class="compare"><figure><a href="${p.image_url}" target="_blank" rel="noopener noreferrer"><img src="${p.image_url}" alt="投稿写真" loading="lazy"></a><figcaption>投稿写真</figcaption></figure><figure><a href="${s.image_url}" target="_blank" rel="noopener noreferrer"><img src="${s.image_url}" alt="投稿地点周辺のストリートビュー" loading="lazy"></a><figcaption>ストリートビュー<br>${escape(s.captured||'撮影時期不明')}頃 · 約${Number(s.distance)}m離れた地点から投稿地点の方向</figcaption></figure></div><small>${copyright} · 画像をタップすると拡大します。撮影時期が古い場合や、災害で景色が変わっている場合があります。AIが判断できなくても、建物・道路・看板などをご自身の目で見比べてください。</small></section>`;
 }
+function showIncident(group) {
+  const latest = group.posts.reduce((a,b) =>
+    postLifecycle(a).confirmed_at > postLifecycle(b).confirmed_at ? a : b);
+  const type = hazardTypes.get(group.category)?.[1] || '種類不明';
+  $('incident-title').textContent = type + 'の報告 · ' + group.posts.length + '件';
+  $('incident-content').innerHTML = '<p class="muted">最終確認 ' +
+    date(postLifecycle(latest).confirmed_at) +
+    ' · 現在表示中 ' + group.active.length + '件</p>' +
+    '<p class="muted">点線は報告地点が集まる目安です。被害の境界や通行可能な範囲を示すものではありません。</p>' +
+    '<ol class="incident-timeline">' + incidentTimeline(group).map(event =>
+      '<li><time>' + date(event.time) + '</time><h3>' + event.label + '</h3>' +
+      (event.image ? '<img src="' + escape(event.image) + '" alt="現地の報告写真" loading="lazy">' : '') +
+      '<p>' + escape(event.note) + '</p><button class="secondary" data-timeline-post="' +
+      event.post.id + '">投稿の詳細を開く</button></li>').join('') + '</ol>';
+  if (!$('incident').open) $('incident').showModal();
+}
+
+$('incident-content').onclick = event => {
+  const button = event.target.closest('[data-timeline-post]');
+  if (!button) return;
+  $('incident').close();
+  void showDetail(button.dataset.timelinePost);
+};
+
+function renderIncidentAreas(visible, groups) {
+  const ids = new Set(visible.map(post => post.id));
+  for (const group of groups) {
+    const members = group.active.filter(post => ids.has(post.id));
+    if (members.length < 2) continue;
+    const center = {
+      latitude:members.reduce((sum,post) => sum + post.latitude, 0) / members.length,
+      longitude:members.reduce((sum,post) => sum + post.longitude, 0) / members.length
+    };
+    const radius = Math.max(...members.map(post => distanceMeters(center, post))) + 30;
+    const type = hazardTypes.get(group.category)?.[1] || '種類不明';
+    const latest = members.reduce((a,b) => postLifecycle(a).confirmed_at > postLifecycle(b).confirmed_at ? a : b);
+    const label = type + ' · ' + members.length + '件 · 最終確認 ' + date(postLifecycle(latest).confirmed_at);
+    L.circle([center.latitude,center.longitude], {
+      radius, color:'#476b80', weight:2, dashArray:'6 5', fillOpacity:0.1
+    }).bindTooltip(label, {permanent:true,direction:'top',className:'incident-label'})
+      .on('click', () => showIncident(group)).addTo(markers);
+  }
+}
+
 function renderFeed() {
   const query=$('search').value.trim().toLowerCase();
-  const visible=posts.filter(p=>p.description.toLowerCase().includes(query));
-  $('count').textContent=posts.length;
-  $('feed').innerHTML=visible.length?visible.map(p=>`<button class="report-card" data-post="${p.id}"><img src="${p.image_url}" alt="投稿写真" loading="lazy"><time>${date(p.created_at)}</time><p>${escape(p.description.slice(0,85))}</p><div class="tags"><span class="tag unknown">${hazardDisplay(p).label}</span><span class="tag ${p.gps.status}">${gpsLabel(p)}</span><span class="tag unknown">${aiLabel(p)}</span></div></button>`).join(''):`<div class="empty"><div class="empty-icon">⌖</div><h3>${query?'該当する投稿がありません':'まだ投稿がありません'}</h3><p>${query?'検索する言葉を変更してください。':'あなたの確認した状況が、<br>地域の情報につながります。'}</p></div>`;
+  const archive = $('post-view').value === 'archive';
+  const groups = groupIncidents(posts);
+  const visibleGroups = groups.filter(group =>
+    (group.active.length === 0) === archive &&
+    group.posts.some(post => post.description.toLowerCase().includes(query)));
+  const visible = visibleGroups.flatMap(group => group.active);
+  $('count').textContent = visibleGroups.length;
+  $('feed').innerHTML = visibleGroups.length ? visibleGroups.map(group => {
+    const latest = group.posts[group.posts.length - 1];
+    const label = hazardTypes.get(group.category)?.[1] || '種類不明';
+    return '<button class="report-card" data-post="' + latest.id + '"><img src="' +
+      escape(latest.image_url) + '" alt="最新の投稿写真" loading="lazy"><time>' +
+      date(latest.created_at) + '</time><p>' + escape(latest.description.slice(0,85)) +
+      '</p><div class="tags"><span class="tag">' + label + ' · 投稿' + group.posts.length +
+      '件</span><span class="tag unknown">' + (archive ? '履歴' : '表示中') +
+      '</span></div></button>';
+  }).join('') : '<div class="empty"><h3>該当する投稿がありません</h3></div>';
   markers.clearLayers();
-  for (const p of visible) {
+
+  renderIncidentAreas(visible, groups);
+  for (const p of visible.filter(p => postLifecycle(p).status === 'active')) {
+    const group = groups.find(group => group.posts.some(post => post.id === p.id));
+    if (group?.active.length >= 2 && group.active[0].id !== p.id) continue;
     const { symbol, level, label } = hazardDisplay(p);
     const { genuine = 0, false: fake = 0 } = p.photo_votes || {};
-    const flagged = reachesVoteThreshold(fake, genuine + fake);
+    const flagged = group?.active.some(post => {
+      const votes = post.photo_votes || {};
+      return reachesVoteThreshold(votes.false || 0, (votes.genuine || 0) + (votes.false || 0));
+    }) || reachesVoteThreshold(fake, genuine + fake);
     const markerLabel = flagged ? label + ' · 偽と判断した票が25％以上' : label;
     const icon = L.divIcon({
       className: 'hazard-marker hazard-' + level + (flagged ? ' hazard-marker-flagged' : ''),
       html: '<span aria-hidden="true">' + symbol + '</span>',
       iconSize: [32, 32], iconAnchor: [16, 32], tooltipAnchor: [0, -28]
     });
-    L.marker([p.latitude, p.longitude], { icon, title: markerLabel })
+    const members = group?.active || [p];
+    const point = [members.reduce((sum,post) => sum + post.latitude,0) / members.length,
+      members.reduce((sum,post) => sum + post.longitude,0) / members.length];
+    L.marker(point, { icon, title: markerLabel })
       .bindTooltip(markerLabel, { direction:'top' })
-      .on('click', () => showDetail(p.id)).addTo(markers);
+      .on('click', () => group && group.posts.length > 1 ? showIncident(group) : showDetail(p.id)).addTo(markers);
   }
 }
 async function refresh() {posts=await api('/api/posts');renderFeed();}
 $('refresh').onclick=()=>refresh().then(()=>toast('最新の投稿を取得しました。')).catch(e=>toast(e.message));
 $('search').oninput=renderFeed;
-$('feed').onclick=e=>{const card=e.target.closest('[data-post]');if(card)showDetail(card.dataset.post);};
-//投稿画面
+$('post-view').onchange=renderFeed;
+setInterval(renderFeed, 30000);
+$('feed').onclick = event => {
+  const card = event.target.closest('[data-post]');
+  if (!card) return;
+  const group = groupIncidents(posts).find(group => group.posts.some(post => post.id === card.dataset.post));
+  if (group?.posts.length > 1) showIncident(group);
+  else void showDetail(card.dataset.post);
+};
 function setPoint(lat,lng){$('latitude').value=lat.toFixed(6);$('longitude').value=lng.toFixed(6);if(pickingPin)map.removeLayer(pickingPin);pickingPin=L.circleMarker([lat,lng],{radius:12,color:'#245748',weight:3,fillOpacity:.25}).addTo(map);}
 function stopGPS(){if(watch!==null)navigator.geolocation.clearWatch(watch);watch=null;clearTimeout(gpsTimer);}
 function startGPS(){
@@ -202,7 +295,7 @@ async function showDetail(id){
     const {post:p,history,priority}=await api(`/api/posts/${id}`);activeDetail=id;
     const preferred=history.filter(p=>priority.includes(p.id)), others=history.filter(p=>!priority.includes(p.id));
     const historyHTML=list=>list.map(h=>`<button class="history-item" data-history="${h.id}"><img src="${h.image_url}" alt="過去の投稿写真" loading="lazy"><span>${date(h.created_at)}${h.id===id?' · 表示中':''}<br>${escape(h.description.slice(0,65))}</span></button>`).join('');
-    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真">${photoVoteSection(p)}<p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
+    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真">${photoVoteSection(p)}<p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}${provenanceHTML(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
     if(!$('detail').open)$('detail').showModal();
   }catch(e){toast(e.message);}
 }

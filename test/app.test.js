@@ -17,6 +17,56 @@ test('距離計算とGPSの精度・未取得・矛盾の評価',()=>{
   assert.equal(gpsResult(point,[{...point,accuracy:10}]).status,'consistent');
   assert.equal(gpsResult(point,[{latitude:36,longitude:139,accuracy:10}]).status,'attention');
 });
+test('時系列GPSデータによる重み付き評価・スパイク除外・ワープ検知・移動到着を検証',()=>{
+  const point={latitude:35.68,longitude:139.76};
+  const baseTime=Date.now()-25000;
+  // 測位精度が徐々に収束し投稿地点付近に留まるケース
+  const converging=[
+    {latitude:35.684,longitude:139.764,accuracy:500,recorded_at:baseTime},
+    {latitude:35.682,longitude:139.762,accuracy:200,recorded_at:baseTime+5000},
+    {latitude:35.6805,longitude:139.7605,accuracy:40,recorded_at:baseTime+10000},
+    {latitude:35.6801,longitude:139.7601,accuracy:15,recorded_at:baseTime+15000},
+    {latitude:35.68,longitude:139.76,accuracy:10,recorded_at:baseTime+20000}
+  ];
+  assert.equal(gpsResult(point,converging).status,'consistent');
+
+  // 1点だけ高精度な遠方スパイクが混入しても他が投稿地点付近なら救済するケース
+  const withSpike=[
+    {latitude:35.68,longitude:139.76,accuracy:30,recorded_at:baseTime},
+    {latitude:35.6801,longitude:139.7601,accuracy:25,recorded_at:baseTime+5000},
+    {latitude:35.78,longitude:139.86,accuracy:5,recorded_at:baseTime+10000},
+    {latitude:35.6802,longitude:139.7602,accuracy:25,recorded_at:baseTime+15000},
+    {latitude:35.68,longitude:139.76,accuracy:20,recorded_at:baseTime+20000}
+  ];
+  assert.equal(gpsResult(point,withSpike).status,'consistent');
+
+  // 先頭1点だけ投稿地点付近で残りが遠方に停滞しているケースは注意判定にする
+  const mostlyFar=[
+    {latitude:35.68,longitude:139.76,accuracy:10,recorded_at:baseTime},
+    {latitude:35.71,longitude:139.79,accuracy:15,recorded_at:baseTime+5000},
+    {latitude:35.7101,longitude:139.7901,accuracy:15,recorded_at:baseTime+10000},
+    {latitude:35.7102,longitude:139.7902,accuracy:15,recorded_at:baseTime+15000}
+  ];
+  assert.equal(gpsResult(point,mostlyFar).status,'attention');
+
+  // 短時間に複数回の不自然なワープを繰り返すケースは注意判定にする
+  const repeatedJumps=[
+    {latitude:35.68,longitude:139.76,accuracy:10,recorded_at:baseTime},
+    {latitude:35.78,longitude:139.86,accuracy:10,recorded_at:baseTime+3000},
+    {latitude:35.88,longitude:139.96,accuracy:10,recorded_at:baseTime+6000},
+    {latitude:35.68,longitude:139.76,accuracy:10,recorded_at:baseTime+9000}
+  ];
+  assert.equal(gpsResult(point,repeatedJumps).status,'attention');
+
+  // 自然な移動速度で投稿地点へ近づき最新測位が範囲内に到着したケースは整合とする
+  const movingArrival=[
+    {latitude:35.6855,longitude:139.76,accuracy:15,recorded_at:baseTime},
+    {latitude:35.6837,longitude:139.76,accuracy:15,recorded_at:baseTime+10000},
+    {latitude:35.6819,longitude:139.76,accuracy:15,recorded_at:baseTime+20000},
+    {latitude:35.6801,longitude:139.76,accuracy:15,recorded_at:baseTime+30000}
+  ];
+  assert.equal(gpsResult(point,movingArrival).status,'consistent');
+});
 test('最新3件と整合性上位3件を重複なく選ぶ',()=>{
   const posts=Array.from({length:8},(_,i)=>({id:String(i),created_at:`2026-10-${String(20-i).padStart(2,'0')}`,gps:{status:i>4?'consistent':'unknown'},ai:{result:'unknown'}}));
   const result=priority(posts);
@@ -31,6 +81,7 @@ async function fixture(){const image=await sharp({create:{width:20,height:20,cha
 test('投稿→永続保存→非公開情報の除外→専用リンク編集削除',async()=>{
   const created=await request('/api/posts','POST',await fixture());assert.equal(created.status,201);
   const {post,management_token:token}=created.body;
+  assert.equal(post.provenance.status,'not_present');
   assert.equal(token.length,43);assert.equal(post.gps.status,'consistent');
   assert.equal(post.metadata.software,'Photo Editor');assert.equal(post.metadata.warnings.length,1);
   const row=app.db.prepare('SELECT * FROM posts WHERE id=?').get(post.id);
@@ -158,4 +209,17 @@ test('写真の真偽投票を集計し、同じブラウザの投票は上書�
   }
   assert.equal((await vote(voter, 'genuine')).status, 404);
   assert.equal(app.db.prepare('SELECT count(*) AS total FROM photo_votes WHERE post_id=?').get(post.id).total, 0);
+});
+
+test('表示期限は種類別で、期限ちょうどに履歴へ移り、解消を優先する', async () => {
+  const { postLifecycle } = await import('../public/lifecycle.js');
+  const start = Date.parse('2026-11-24T00:00:00Z');
+  for (const [category, hours] of Object.entries({fire:6,flood:24,utility:24,road:72,landslide:168,building:168,unknown:24})) {
+    const post = {created_at:new Date(start).toISOString(),hazard:{category}};
+    assert.equal(postLifecycle(post,start + hours*3600000-1).status,'active');
+    assert.equal(postLifecycle(post,start + hours*3600000).status,'expired');
+  }
+  const post = {created_at:new Date(start).toISOString(),last_confirmed_at:new Date(start+3600000).toISOString()};
+  assert.equal(postLifecycle(post,start+24*3600000).status,'active');
+  assert.equal(postLifecycle({...post,resolved_at:new Date(start).toISOString()},start).status,'resolved');
 });

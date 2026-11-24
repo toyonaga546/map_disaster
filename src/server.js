@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import exifr from 'exifr';
+import { inspectProvenance } from './provenance.js';
 import { distance, validPoint, gpsResult, priority } from './domain.js';
 import { analyzePost } from './analysis.js';
 import { assessHazard, unavailableHazard } from './hazard.js';
@@ -90,12 +91,16 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         const raw = Buffer.from(input.image.split(',')[1], 'base64');
         if (!raw.length || raw.length > 8_000_000) throw fail(413,'写真は8MB以下にしてください。');
         let processed;
+        let mimeType;
         try {
           const image = sharp(raw,{ limitInputPixels:40000000 });
-          if (!['jpeg','png','webp'].includes((await image.metadata()).format)) throw new Error('format');
+          const format = (await image.metadata()).format;
+          if (!['jpeg','png','webp'].includes(format)) throw new Error('format');
+          mimeType = 'image/' + format;
           processed = await image.rotate().resize({ width:1600,height:1600,fit:'inside',withoutEnlargement:true }).jpeg({quality:82}).toBuffer();
         }
         catch { throw fail(400,'写真を読み込めません。別の写真を選んでください。'); }
+        const provenance = await inspectProvenance(raw, mimeType);
         let metadata = { status:'確認できない', warnings:[] };
         try {
           const exif = await exifr.parse(raw, ['DateTimeOriginal','Make','Model','Software','latitude','longitude']);
@@ -123,7 +128,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
             view = { info:null, images:null }; streetview = { status:'unavailable', reason:'ストリートビュー画像を保存できませんでした。' };
           }
         }
-        const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
+        const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, provenance, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
         if (input.hazard_consent === true) post.hazard = pendingHazard();
         try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true}); }
         catch (e) {
@@ -191,7 +196,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         catch(error){if(error.code==='ENOENT'||error.code===404)throw fail(404,'写真が見つかりません。');throw error;}
         res.writeHead(200,{'Content-Type':'image/jpeg'});res.end(req.method==='HEAD'?undefined:content);return;
       }
-      const staticFiles = { '/':'public/index.html', '/app.js':'public/app.js', '/style.css':'public/style.css', '/vendor/leaflet.js':'node_modules/leaflet/dist/leaflet.js', '/vendor/leaflet.css':'node_modules/leaflet/dist/leaflet.css' };
+      const staticFiles = { '/':'public/index.html', '/app.js':'public/app.js', '/lifecycle.js':'public/lifecycle.js', '/incidents.js':'public/incidents.js', '/style.css':'public/style.css', '/vendor/leaflet.js':'node_modules/leaflet/dist/leaflet.js', '/vendor/leaflet.css':'node_modules/leaflet/dist/leaflet.css' };
       const file = staticFiles[url.pathname] ? path.join(root,staticFiles[url.pathname]) : null;
       if (!file) throw fail(404,'見つかりません。');
       const content = await readFile(file).catch(()=>{throw fail(404,'見つかりません。');});
