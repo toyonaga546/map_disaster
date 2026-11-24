@@ -211,6 +211,7 @@ test('写真の真偽投票を集計し、同じブラウザの投票は上書�
   assert.equal(app.db.prepare('SELECT count(*) AS total FROM photo_votes WHERE post_id=?').get(post.id).total, 0);
 });
 
+
 test('SynthIDの手動確認は投稿者のみ記録でき、公開結果と画像の確認対象を保持する', async () => {
   const created = await request('/api/posts','POST',await fixture());
   const {post,management_token:token} = created.body;
@@ -237,5 +238,19 @@ test('SynthIDの手動確認は投稿者のみ記録でき、公開結果と画�
     assert.equal((await request(route+'/synthid-review','PUT',{...review,result:'inconclusive'},token)).status,200);
   } finally { await request(route,'DELETE',null,token); }
   assert.equal((await request(route+'/synthid-review','PUT',review,token)).status,404);
+});
+
+
+test('表示期限は種類別で、期限ちょうどに履歴へ移り、解消を優先する', async () => {
+  const { postLifecycle } = await import('../public/lifecycle.js');
+  const start = Date.parse('2026-11-24T00:00:00Z');
+  for (const [category, hours] of Object.entries({fire:6,flood:24,utility:24,road:72,landslide:168,building:168,unknown:24})) {
+    const post = {created_at:new Date(start).toISOString(),hazard:{category}};
+    assert.equal(postLifecycle(post,start + hours*3600000-1).status,'active');
+    assert.equal(postLifecycle(post,start + hours*3600000).status,'expired');
+  }
+  const post = {created_at:new Date(start).toISOString(),last_confirmed_at:new Date(start+3600000).toISOString()};
+  assert.equal(postLifecycle(post,start+24*3600000).status,'active');
+  assert.equal(postLifecycle({...post,resolved_at:new Date(start).toISOString()},start).status,'resolved');
 });
 
