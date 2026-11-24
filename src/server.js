@@ -191,7 +191,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         catch(error){if(error.code==='ENOENT'||error.code===404)throw fail(404,'写真が見つかりません。');throw error;}
         res.writeHead(200,{'Content-Type':'image/jpeg'});res.end(req.method==='HEAD'?undefined:content);return;
       }
-      const staticFiles = { '/':'public/index.html', '/app.js':'public/app.js', '/style.css':'public/style.css', '/vendor/leaflet.js':'node_modules/leaflet/dist/leaflet.js', '/vendor/leaflet.css':'node_modules/leaflet/dist/leaflet.css' };
+      const staticFiles = { '/':'public/index.html', '/app.js':'public/app.js', '/lifecycle.js':'public/lifecycle.js', '/incidents.js':'public/incidents.js', '/style.css':'public/style.css', '/vendor/leaflet.js':'node_modules/leaflet/dist/leaflet.js', '/vendor/leaflet.css':'node_modules/leaflet/dist/leaflet.css' };
       const file = staticFiles[url.pathname] ? path.join(root,staticFiles[url.pathname]) : null;
       if (!file) throw fail(404,'見つかりません。');
       const content = await readFile(file).catch(()=>{throw fail(404,'見つかりません。');});
