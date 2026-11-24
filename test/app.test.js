@@ -81,6 +81,7 @@ async function fixture(){const image=await sharp({create:{width:20,height:20,cha
 test('投稿→永続保存→非公開情報の除外→専用リンク編集削除',async()=>{
   const created=await request('/api/posts','POST',await fixture());assert.equal(created.status,201);
   const {post,management_token:token}=created.body;
+  assert.equal(post.provenance.status,'not_present');
   assert.equal(token.length,43);assert.equal(post.gps.status,'consistent');
   assert.equal(post.metadata.software,'Photo Editor');assert.equal(post.metadata.warnings.length,1);
   const row=app.db.prepare('SELECT * FROM posts WHERE id=?').get(post.id);
