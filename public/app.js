@@ -189,6 +189,28 @@ $('incident-content').onclick = event => {
   void showDetail(button.dataset.timelinePost);
 };
 
+function bindIncidentInfo(layer, label, group) {
+  if (window.matchMedia('(hover: none), (pointer: coarse)').matches) {
+    const content = document.createElement('div');
+    const summary = document.createElement('p');
+    summary.textContent = label;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = '時系列を見る';
+    button.addEventListener('click', () => {
+      layer.closePopup();
+      showIncident(group);
+    });
+    content.append(summary, button);
+    return layer.bindPopup(content);
+  }
+  return layer.bindTooltip(label, {
+    permanent:false,sticky:true,direction:'top',className:'incident-label'
+  }).on('click', () => showIncident(group));
+}
+
+
 function renderIncidentAreas(visible, groups) {
   const ids = new Set(visible.map(post => post.id));
   for (const group of groups) {
@@ -202,10 +224,10 @@ function renderIncidentAreas(visible, groups) {
     const type = hazardTypes.get(group.category)?.[1] || '種類不明';
     const latest = members.reduce((a,b) => postLifecycle(a).confirmed_at > postLifecycle(b).confirmed_at ? a : b);
     const label = type + ' · ' + members.length + '件 · 最終確認 ' + date(postLifecycle(latest).confirmed_at);
-    L.circle([center.latitude,center.longitude], {
+    const area = L.circle([center.latitude,center.longitude], {
       radius, color:'#476b80', weight:2, dashArray:'6 5', fillOpacity:0.1
-    }).bindTooltip(label, {permanent:true,direction:'top',className:'incident-label'})
-      .on('click', () => showIncident(group)).addTo(markers);
+    });
+    bindIncidentInfo(area, label, group).addTo(markers);
   }
 }
 
@@ -249,9 +271,15 @@ function renderFeed() {
     const members = group?.active || [p];
     const point = [members.reduce((sum,post) => sum + post.latitude,0) / members.length,
       members.reduce((sum,post) => sum + post.longitude,0) / members.length];
-    L.marker(point, { icon, title: markerLabel })
-      .bindTooltip(markerLabel, { direction:'top' })
-      .on('click', () => group && group.posts.length > 1 ? showIncident(group) : showDetail(p.id)).addTo(markers);
+    const marker = L.marker(point, { icon, title: markerLabel });
+    if (group && group.posts.length > 1) {
+      const latest = members.reduce((a,b) => postLifecycle(a).confirmed_at > postLifecycle(b).confirmed_at ? a : b);
+      const summary = markerLabel + ' · ' + members.length + '件 · 最終確認 ' + date(postLifecycle(latest).confirmed_at);
+      bindIncidentInfo(marker, summary, group).addTo(markers);
+    } else {
+      marker.bindTooltip(markerLabel, {direction:'top'})
+        .on('click', () => showDetail(p.id)).addTo(markers);
+    }
   }
 }
 async function refresh() {posts=await api('/api/posts');renderFeed();}
