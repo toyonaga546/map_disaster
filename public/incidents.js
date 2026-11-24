@@ -34,6 +34,6 @@ export function groupIncidents(posts, now = Date.now()) {
 
 export function incidentTimeline(group) {
   return [...group.posts]
-    .sort((a,b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+    .sort((a,b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id))
     .map(post => ({post, time:post.created_at, label:'投稿', note:post.description, image:post.image_url}));
 }
