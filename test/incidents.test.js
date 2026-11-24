@@ -30,6 +30,7 @@ test('現在の範囲には有効な投稿だけを含め、時系列には期�
   const third=post('c',25);
   const [group]=groupIncidents([third,second,first],start+27*3600000);
   assert.deepEqual(group.active.map(post=>post.id),['c']);
+  assert.deepEqual(incidentTimeline(group).map(event=>event.post.id), ['c','b','a']);
   assert.deepEqual(incidentTimeline(group).map(event=>event.label),
     ['投稿','投稿','投稿']);
 });
