@@ -210,3 +210,32 @@ test('写真の真偽投票を集計し、同じブラウザの投票は上書�
   assert.equal((await vote(voter, 'genuine')).status, 404);
   assert.equal(app.db.prepare('SELECT count(*) AS total FROM photo_votes WHERE post_id=?').get(post.id).total, 0);
 });
+
+test('SynthIDの手動確認は投稿者のみ記録でき、公開結果と画像の確認対象を保持する', async () => {
+  const created = await request('/api/posts','POST',await fixture());
+  const {post,management_token:token} = created.body;
+  const route = '/api/posts/' + post.id;
+  const review = {result:'detected',tool:'detector',image_source:'original',note:'Google AIの透かしが検出されたとの表示',confirmed:true};
+  try {
+    assert.equal((await request(route+'/synthid-review','PUT',review,'invalid')).status,403);
+    for (const changes of [{result:'real'},{tool:'other'},{image_source:'other'},{note:''},{confirmed:false}]) {
+      assert.equal((await request(route+'/synthid-review','PUT',{...review,...changes},token)).status,400);
+    }
+    const saved = await request(route+'/synthid-review','PUT',review,token);
+    assert.equal(saved.status,200);
+    assert.equal(saved.body.method,'manual');
+    assert.equal(saved.body.reviewer,'post_owner');
+    assert.ok(Number.isFinite(Date.parse(saved.body.recorded_at)));
+    const detail = (await request(route)).body.post;
+    assert.equal(detail.synthid_review.result,'detected');
+    assert.equal(detail.synthid_review.image_source,'original');
+    assert.equal(detail.description,post.description);
+    assert.deepEqual(detail.provenance,post.provenance);
+    const changed=await request(route+'/synthid-review','PUT',{...review,result:'not_detected',tool:'gemini',image_source:'published'},token);
+    assert.equal(changed.status,200);
+    assert.equal((await request('/api/posts')).body.find(item=>item.id===post.id).synthid_review.result,'not_detected');
+    assert.equal((await request(route+'/synthid-review','PUT',{...review,result:'inconclusive'},token)).status,200);
+  } finally { await request(route,'DELETE',null,token); }
+  assert.equal((await request(route+'/synthid-review','PUT',review,token)).status,404);
+});
+

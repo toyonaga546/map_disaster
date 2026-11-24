@@ -90,6 +90,45 @@ async function submitPhotoVote(choice, panel, id) {
   }
 }
 
+function synthidReviewHTML(post) {
+  const review = post.synthid_review;
+  const labels = {detected:'電子透かしを検出との報告',not_detected:'電子透かし未検出との報告',inconclusive:'判断できずとの報告'};
+  return '<section class="verification-block"><strong>SynthIDの手動確認 · ' +
+    (labels[review?.result] || '未確認') + '</strong>' +
+    (review ? '<p>投稿者による確認結果の記録 · ' +
+      (review.tool === 'detector' ? 'SynthID Detector' : 'Gemini') + '<br>確認画像 ' +
+      (review.image_source === 'original' ? '投稿前の元画像' : '公開用の変換済み画像') +
+      '<br>記録日時 ' + date(review.recorded_at) + '</p><p>' + escape(review.note) + '</p>' : '') +
+    '<p><a href="https://synthid.com/" target="_blank" rel="noopener noreferrer">Google公式のSynthID Detectorを開く ↗</a></p>' +
+    '<small>投稿者が公式ツールで確認し、管理リンクから記録する機能です。透かしが検出されても、生成したサービスは公式ツールの結果で確認してください。未検出でもAI生成の可能性はあります。</small></section>';
+}
+
+function fillSynthidReview(post) {
+  const review = post.synthid_review;
+  $('synthid-result').value = review?.result || '';
+  $('synthid-tool').value = review?.tool || 'detector';
+  $('synthid-source').value = review?.image_source || 'original';
+  $('synthid-note').value = review?.note || '';
+  $('synthid-confirmed').checked = false;
+  $('synthid-photo').href = post.image_url;
+}
+
+$('synthid-review-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = $('save-synthid');
+  button.disabled = true;
+  try {
+    await api('/api/posts/' + manager.id + '/synthid-review', {
+      method:'PUT',headers:{'Content-Type':'application/json',Authorization:'Bearer ' + manager.token},
+      body:JSON.stringify({result:$('synthid-result').value,tool:$('synthid-tool').value,
+        image_source:$('synthid-source').value,note:$('synthid-note').value,confirmed:$('synthid-confirmed').checked})
+    });
+    toast('SynthIDの手動確認結果を保存しました。');
+    await refresh();
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
+};
+
 function provenanceHTML(post) {
   const result = post.provenance;
   const labels = {
@@ -203,7 +242,7 @@ async function showDetail(id){
     const {post:p,history,priority}=await api(`/api/posts/${id}`);activeDetail=id;
     const preferred=history.filter(p=>priority.includes(p.id)), others=history.filter(p=>!priority.includes(p.id));
     const historyHTML=list=>list.map(h=>`<button class="history-item" data-history="${h.id}"><img src="${h.image_url}" alt="過去の投稿写真" loading="lazy"><span>${date(h.created_at)}${h.id===id?' · 表示中':''}<br>${escape(h.description.slice(0,65))}</span></button>`).join('');
-    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真">${photoVoteSection(p)}<p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}${provenanceHTML(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
+    $('detail-content').innerHTML=`<img class="detail-photo" src="${p.image_url}" alt="現地の投稿写真">${photoVoteSection(p)}<p class="detail-date">${date(p.created_at)} 投稿${p.updated_at?` / ${date(p.updated_at)} 編集`:''}<br>投稿地点 ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p><p class="detail-description">${escape(p.description)}</p>${hazardDetails(p)}${provenanceHTML(p)}${synthidReviewHTML(p)}<section class="verification-block"><strong>⌖ GPS · ${escape(p.gps.label)}</strong><p>${p.gps.distance!==undefined?`投稿地点との距離：約${p.gps.distance}m / 精度：約${p.gps.accuracy}m<br>`:''}${escape(p.gps.reason)}</p></section><section class="verification-block"><strong>◇ ${aiLabel(p)}</strong><p>${escape(p.ai.reason)}</p><small>AIは画像の整合性の参考情報です。投稿内容の真偽を保証しません。</small></section>${streetviewHTML(p)}<section class="verification-block"><strong>写真メタデータ · ${escape(p.metadata.status)}</strong><p>撮影日時：${p.metadata.taken_at?date(p.metadata.taken_at):'確認できない'}<br>カメラ：${escape(p.metadata.camera || '確認できない')}<br>編集ソフト：${escape(p.metadata.software || '確認できない')}<br>写真の位置情報：${escape(p.metadata.location || '確認できない')}</p>${p.metadata.warnings.map(w=>`<p>${escape(w)}</p>`).join('')}<small>メタデータがないことは、写真が未編集である証明にはなりません。公開画像からメタデータを除去しています。</small></section><a class="secondary" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}" target="_blank" rel="noopener noreferrer">Googleで周辺のストリートビューを確認 ↗</a><p class="muted">外部サイトを開きます。撮影時期が現在と異なる場合や、画像が存在しない場合があります。</p><h2>同じ場所の投稿 <small>半径100m・${history.length}件</small></h2><p class="muted">最新3件と整合性の補助スコア上位3件を重複なく表示</p>${historyHTML(preferred)}${others.length?`<details><summary>その他の過去投稿 ${others.length}件</summary>${historyHTML(others)}</details>`:''}`;
     if(!$('detail').open)$('detail').showModal();
   }catch(e){toast(e.message);}
 }
@@ -222,7 +261,7 @@ async function management(){
   const match=location.hash.match(/^#manage=([a-f0-9-]{36})\.([A-Za-z0-9_-]{43})$/);
   if(!match)return;
   manager={id:match[1],token:match[2]};
-  try{const {post}=await api(`/api/posts/${manager.id}`);$('edit-description').value=post.description;if($('detail').open)$('detail').close();if(!$('manage').open)$('manage').showModal();}catch(e){toast(e.message);}
+  try{const {post}=await api(`/api/posts/${manager.id}`);$('edit-description').value=post.description;fillSynthidReview(post);if($('detail').open)$('detail').close();if(!$('manage').open)$('manage').showModal();}catch(e){toast(e.message);}
 }
 $('manage-form').onsubmit=async e=>{e.preventDefault();try{await api(`/api/posts/${manager.id}`,{method:'PATCH',headers:{'Content-Type':'application/json',Authorization:`Bearer ${manager.token}`},body:JSON.stringify({description:$('edit-description').value})});toast('変更を保存しました。');$('manage').close();await refresh();}catch(e){toast(e.message);}};
 $('delete-post').onclick=async()=>{if(!confirm('この投稿と写真を削除しますか？'))return;try{await api(`/api/posts/${manager.id}`,{method:'DELETE',headers:{'Content-Type':'application/json',Authorization:`Bearer ${manager.token}`}});$('manage').close();history.replaceState(null,'','/');await refresh();toast('投稿を削除しました。');}catch(e){toast(e.message);}};

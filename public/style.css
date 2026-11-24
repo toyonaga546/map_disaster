@@ -14,3 +14,5 @@
 .legend i{margin-right:4px}
 .legend .blue-dot{margin-left:0}
 .legend{flex-wrap:wrap;max-width:calc(100% - 36px)}
+
+#synthid-review-form select{display:block;width:100%;font:inherit;margin-top:8px;padding:10px;border:1px solid #d7dfd6;border-radius:7px;background:#fff;color:#2f4339}
