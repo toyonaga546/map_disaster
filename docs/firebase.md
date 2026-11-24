@@ -83,6 +83,33 @@ npx firebase-tools login
 - HostingからFunctionへのリクエストは60秒で打ち切られる。投稿処理（ストリートビュー4枚の取得を含む）はこの範囲に収める。
 - 配備後の動作確認は未実施。テストはモックとローカルで、Functionsの実行環境、Hostingのリライト、Firestoreトリガーは実環境で検証していない。
 
+## GitHub Actionsによる自動デプロイ
+
+`main`へマージ（push）されると、`.github/workflows/deploy.yml`がテストを実行し、成功したら`scripts/deploy.sh`と同じ内容でCloud FunctionsとFirebase Hostingへデプロイする。ActionsタブのRun workflowから手動実行もできる。このワークフローは未実行で、初回設定後の動作は未検証。
+
+### 初回設定
+
+1. Google Cloudでデプロイ用のサービスアカウントを作り、次のロールを付与する。
+   - Firebase Admin（`roles/firebase.admin`）
+   - Cloud Functions Admin（`roles/cloudfunctions.admin`）
+   - Secret Manager Admin（`roles/secretmanager.admin`）
+   - Service Account User（`roles/iam.serviceAccountUser`）
+   - Cloud Build EditorとArtifact Registry管理者（Functionsのビルド用）
+2. そのサービスアカウントのJSONキーを発行する。
+3. GitHubリポジトリのSettings → Secrets and variables → Actionsに登録する。
+
+| Secret | 必須 | 内容 |
+| --- | --- | --- |
+| `FIREBASE_SERVICE_ACCOUNT` | 必須 | サービスアカウントのJSONキー全文 |
+| `OPENAI_API_KEY` | 任意 | 未設定ならAI比較は「APIキー未設定」になる |
+| `GOOGLE_MAPS_API_KEY` | 任意 | 未設定ならストリートビュー画像は取得されない |
+
+JSONキーはリポジトリやチャットに貼らない。キーを持たない運用にする場合は、`google-github-actions/auth`のWorkload Identity Federationへ切り替える。
+
+OpenAIとGoogle Mapsのキーは、デプロイのたびにGitHub SecretsからSecret Managerへ上書き登録する。GitHub側に登録しない場合、`.env`の値は使われないので、手元の`scripts/deploy.sh`で入れたSecretは次回の自動デプロイ時にFunctionへ結び付けられなくなる。
+
+mainへのマージでデプロイが走るため、Branch protectionで`Test`ワークフローの成功を必須にしておくと安全。
+
 ## 動作検証の範囲
 
 `npm test`は15件成功。SQLite統合テスト、Firestore/Storageアダプターのモック、写真保存失敗・DB保存失敗時の後始末、削除再試行、従来写真の表示、ローカル未保存、AIへのBuffer入力を検証する。
