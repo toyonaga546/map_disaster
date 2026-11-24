@@ -259,9 +259,21 @@ $('photo').onchange=()=>{
   if(previewURL)URL.revokeObjectURL(previewURL);
   previewURL=URL.createObjectURL(file);$('preview').src=previewURL;$('preview').hidden=false;
 };
+let mapMovedByUser=false;
+map.on('dragstart',()=>{mapMovedByUser=true;});
+// ユーザの位置情報を取得して地図の中心に表示する。初回は地図を移動させるが、ユーザがすでに地図を動かした場合や投稿フォームを開いた場合は移動させない
+// silent=trueの場合はエラーをトースト表示しない
+function showCurrentLocation(silent=false){
+  if(!navigator.geolocation){if(!silent)toast('位置情報を利用できません。');return;}
+  navigator.geolocation.getCurrentPosition(p=>{
+    const point=[p.coords.latitude,p.coords.longitude];
+    if(currentPin)map.removeLayer(currentPin);
+    currentPin=L.circleMarker(point,{radius:8,color:'#fff',weight:3,fillColor:'#548aba',fillOpacity:1}).addTo(map);
+    if(!silent||(!mapMovedByUser&&!composing))map.setView(point,16);
+  },()=>{if(!silent)toast('現在地を取得できません。ブラウザの位置情報設定をご確認ください。');},{enableHighAccuracy:true,timeout:10000});
+}
 $('locate').onclick=()=>{
-  if(!navigator.geolocation)return toast('位置情報を利用できません。');
-  navigator.geolocation.getCurrentPosition(p=>{map.setView([p.coords.latitude,p.coords.longitude],16);if(currentPin)map.removeLayer(currentPin);currentPin=L.circleMarker([p.coords.latitude,p.coords.longitude],{radius:8,color:'#fff',weight:3,fillColor:'#548aba',fillOpacity:1}).addTo(map);},()=>toast('現在地を取得できません。ブラウザの位置情報設定をご確認ください。'),{enableHighAccuracy:true,timeout:10000});
+  showCurrentLocation();
 };
 $('post-form').onsubmit=async event=>{
   event.preventDefault();const button=$('submit-post');button.disabled=true;button.textContent='投稿を保存中…';
@@ -277,6 +289,7 @@ $('post-form').onsubmit=async event=>{
     const box=document.createElement('section');box.className='verification-block';const title=document.createElement('strong');title.textContent='投稿を保存しました。専用の管理リンク';const anchor=document.createElement('a');anchor.href=link;anchor.className='management-link';anchor.textContent=link;const note=document.createElement('p');note.textContent='このリンクは今回のみ表示します。コピーして保管してください。リンクを知る人は編集・削除できます。';box.append(title,anchor,note);$('detail-content').prepend(box);map.setView([result.post.latitude,result.post.longitude],16);
   }catch(e){toast(e.message);}finally{button.disabled=false;button.textContent='この場所の状況を投稿する →';}
 };
+//詳細画面
 async function showDetail(id){
   try{
     const {post:p,history,priority}=await api(`/api/posts/${id}`);activeDetail=id;
@@ -295,6 +308,7 @@ $('detail-content').onclick = event => {
   const item = event.target.closest('[data-history]');
   if (item) showDetail(item.dataset.history, true);
 };
+//管理リンクと起動
 $('refresh-detail').onclick=()=>{if($('detail-content').querySelector('.management-link')&&!confirm('管理リンクは再表示できません。保管済みの場合はOKを押して評価を更新してください。'))return;if(activeDetail)showDetail(activeDetail);};
 let manager=null;
 async function management(){
@@ -307,5 +321,6 @@ $('manage-form').onsubmit=async e=>{e.preventDefault();try{await api(`/api/posts
 $('delete-post').onclick=async()=>{if(!confirm('この投稿と写真を削除しますか？'))return;try{await api(`/api/posts/${manager.id}`,{method:'DELETE',headers:{'Content-Type':'application/json',Authorization:`Bearer ${manager.token}`}});$('manage').close();history.replaceState(null,'','/');await refresh();toast('投稿を削除しました。');}catch(e){toast(e.message);}};
 window.addEventListener('hashchange',management);
 window.addEventListener('pagehide',stopGPS);
+showCurrentLocation(true);
 await refresh().catch(e=>toast(e.message));await management();
 setInterval(async()=>{if(!document.hidden&&!composing){try{await refresh();}catch{/* Keep the last successful list during transient failures. */}}},15000);
