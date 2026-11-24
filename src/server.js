@@ -141,6 +141,29 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         if (!deferAnalysis) void runAnalysis(id).catch(()=>console.error('AI結果の保存に失敗しました。'));
         return;
       }
+      const synthidMatch = url.pathname.match(/^\/api\/posts\/([a-f0-9-]{36})\/synthid-review$/);
+      if (synthidMatch && req.method === 'PUT') {
+        const row = await store.get(synthidMatch[1]);
+        if (!row) throw fail(404, '投稿が見つかりません。');
+        const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+        const tokenHash = row.private?.token_hash;
+        if (typeof tokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(tokenHash) ||
+            !timingSafeEqual(hash(token), Buffer.from(tokenHash, 'hex'))) throw fail(403, '管理リンクが無効です。');
+        const input = await body(req);
+        if (!input || input.confirmed !== true ||
+            !['detected','not_detected','inconclusive'].includes(input.result) ||
+            !['detector','gemini'].includes(input.tool) ||
+            !['original','published'].includes(input.image_source) ||
+            typeof input.note !== 'string' || !input.note.trim() || input.note.length > 1000) {
+          throw fail(400, '公式ツール、確認画像、結果、1000文字以内の確認内容と確認チェックが必要です。');
+        }
+        const synthid_review = {method:'manual',reviewer:'post_owner',result:input.result,
+          tool:input.tool,image_source:input.image_source,note:input.note.trim(),recorded_at:new Date().toISOString()};
+        const updated = await store.patch(row.post.id, {synthid_review});
+        if (!updated) throw fail(404, '投稿が見つかりません。');
+        return json(res, 200, synthid_review);
+      }
+
       const voteMatch = url.pathname.match(/^\/api\/posts\/([a-f0-9-]{36})\/vote$/);
       if (voteMatch && req.method === 'PUT') {
         const input = await body(req);
