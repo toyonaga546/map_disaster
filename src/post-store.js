@@ -16,6 +16,7 @@ export async function createSqliteStore(directory) {
   const db = new DatabaseSync(path.join(directory, 'posts.sqlite'));
   db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS posts (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, payload TEXT NOT NULL, gps_private TEXT NOT NULL, ai_consent INTEGER NOT NULL DEFAULT 0)');
   if (!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='ai_consent')) db.exec('ALTER TABLE posts ADD COLUMN ai_consent INTEGER NOT NULL DEFAULT 0');
+  if (!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='provenance_consent')) db.exec('ALTER TABLE posts ADD COLUMN provenance_consent INTEGER NOT NULL DEFAULT 0');
   db.exec('PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS photo_votes (post_id TEXT NOT NULL, voter_hash TEXT NOT NULL, choice TEXT NOT NULL, PRIMARY KEY (post_id, voter_hash))');
   function transaction(write) {
     db.exec('BEGIN IMMEDIATE');
@@ -32,8 +33,8 @@ export async function createSqliteStore(directory) {
     db,
     async list() { return db.prepare('SELECT payload FROM posts').all().map(r=>JSON.parse(r.payload)); },
     async listConsenting() { return db.prepare('SELECT payload FROM posts WHERE ai_consent=1').all().map(r=>JSON.parse(r.payload)); },
-    async get(id) { const row=db.prepare('SELECT * FROM posts WHERE id=?').get(id); return row ? {post:JSON.parse(row.payload),private:{token_hash:row.token_hash,gps_samples:JSON.parse(row.gps_private),ai_consent:!!row.ai_consent}} : null; },
-    async create(post, privateData) { db.prepare('INSERT INTO posts (id,token_hash,payload,gps_private,ai_consent) VALUES (?,?,?,?,?)').run(post.id,privateData.token_hash,JSON.stringify(post),JSON.stringify(privateData.gps_samples),privateData.ai_consent?1:0); },
+    async get(id) { const row=db.prepare('SELECT * FROM posts WHERE id=?').get(id); return row ? {post:JSON.parse(row.payload),private:{token_hash:row.token_hash,gps_samples:JSON.parse(row.gps_private),ai_consent:!!row.ai_consent,provenance_consent:!!row.provenance_consent}} : null; },
+    async create(post, privateData) { db.prepare('INSERT INTO posts (id,token_hash,payload,gps_private,ai_consent,provenance_consent) VALUES (?,?,?,?,?,?)').run(post.id,privateData.token_hash,JSON.stringify(post),JSON.stringify(privateData.gps_samples),privateData.ai_consent?1:0,privateData.provenance_consent===true?1:0); },
     async patch(id, fields, matches = () => true) {
       return transaction(() => {
         const row = db.prepare('SELECT payload FROM posts WHERE id=?').get(id);

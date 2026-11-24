@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { Context, Reader } from '@contentauth/c2pa-node';
+import { inspectOpenAIProvenance } from './provenance-api.js';
 
 const generated = 'http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia';
 const editedTypes = new Set([
@@ -70,4 +71,25 @@ export async function inspectProvenance(buffer, mimeType) {
   } catch {
     return {status:'unavailable',checked_at,reason:'C2PAの検証処理に失敗しました。'};
   }
+}
+
+export function combineProvenance(local, remote, checked_at=new Date().toISOString()) {
+  const positive = result => ['ai_generated','ai_edited'].includes(result?.status);
+  // An invalid local manifest is not promoted to verified by a conflicting
+  // remote result. SynthID is evaluated independently from the signature.
+  const c2pa = !positive(local) && local?.status!=='invalid' && remote?.c2pa?.status==='ai_generated'
+    ? remote.c2pa : {...local,source:'local'};
+  const synthid = remote.synthid;
+  const status = positive(c2pa) ? c2pa.status : synthid.status==='detected' ? 'ai_signal' : 'unknown';
+  const reason = positive(c2pa) ? c2pa.reason : status==='ai_signal' ? synthid.reason
+    : 'AI生成・編集を示す検証済みの情報を確認できませんでした。実写であることを示す結果ではありません。';
+  return {status,reason,checked_at,c2pa,synthid};
+}
+
+export async function inspectImageProvenance(buffer,mimeType,options={}) {
+  const [local,remote]=await Promise.all([
+    inspectProvenance(buffer,mimeType),
+    inspectOpenAIProvenance(buffer,mimeType,options)
+  ]);
+  return combineProvenance(local,remote);
 }

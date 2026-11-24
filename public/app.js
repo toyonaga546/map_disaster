@@ -1,4 +1,5 @@
 import { postLifecycle } from './lifecycle.js';
+import { provenanceHTML } from './provenance.js';
 import { groupIncidents, incidentTimeline, distanceMeters } from './incidents.js';
 
 const $ = id => document.getElementById(id);
@@ -91,21 +92,6 @@ async function submitPhotoVote(choice, panel, id) {
   } finally {
     buttons.forEach(button => button.disabled = false);
   }
-}
-
-function provenanceHTML(post) {
-  const result = post.provenance;
-  const labels = {
-    ai_generated:'AI生成の記録あり',ai_edited:'AI編集・生成素材の使用記録あり',
-    verified:'生成・編集情報を確認',not_present:'識別情報なし',
-    invalid:'検証できず（整合性エラー）',untrusted:'発行元未確認',unavailable:'確認失敗'
-  };
-  return '<section class="verification-block"><strong>画像の生成元 · ' +
-    (labels[result?.status] || '未検証') + '</strong><p>' +
-    escape(result?.reason || 'この投稿は生成元の検証に対応する前に保存されています。') + '</p>' +
-    (result?.issuer ? '<p>署名の発行元 ' + escape(result.issuer) + '</p>' : '') +
-    (result?.checked_at ? '<small>投稿時の元画像を検証 · ' + date(result.checked_at) + '</small><br>' : '') +
-    '<small>識別情報がなくてもAI生成の可能性はあります。撮影場所・日時や投稿内容の真偽は、現地情報と合わせて確認してください。</small></section>';
 }
 
 function hazardDetails(post) {
@@ -282,7 +268,7 @@ $('post-form').onsubmit=async event=>{
     imageData=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('写真を読み込めません。'));reader.readAsDataURL(file);});
     stopGPS();
     const freshSamples=samples.filter(s=>Date.now()-s.recorded_at<=120000);
-    const result=await api('/api/posts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:$('description').value,latitude:Number($('latitude').value),longitude:Number($('longitude').value),samples:freshSamples,image:imageData,ai_consent:true,hazard_consent:true})});
+    const result=await api('/api/posts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:$('description').value,latitude:Number($('latitude').value),longitude:Number($('longitude').value),samples:freshSamples,image:imageData,ai_consent:true,hazard_consent:true,provenance_consent:$('provenance-consent').checked})});
     const link=`${location.origin}/#manage=${result.post.id}.${result.management_token}`;
     $('compose').close();posts.unshift(result.post);renderFeed();await showDetail(result.post.id);
     if(!$('detail').open){$('detail-content').textContent='投稿は保存されました。詳細は後ほど開き直してください。';$('detail').showModal();}

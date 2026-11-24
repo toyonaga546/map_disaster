@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import exifr from 'exifr';
-import { inspectProvenance } from './provenance.js';
+import { inspectImageProvenance } from './provenance.js';
 import { distance, validPoint, gpsResult, priority } from './domain.js';
 import { analyzePost } from './analysis.js';
 import { assessHazard, unavailableHazard } from './hazard.js';
@@ -14,7 +14,7 @@ import { createPostStore } from './post-store.js';
 import { createImageStore, localImageStore } from './image-store.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-export async function createApp(directory = path.join(root, 'data'), injectedStore, injectedImages, fetchView = fetchStreetView, { deferAnalysis = false } = {}) {
+export async function createApp(directory = path.join(root, 'data'), injectedStore, injectedImages, fetchView = fetchStreetView, { deferAnalysis = false, provenanceRequest } = {}) {
   const store = injectedStore || await createPostStore(directory);
   let images;
   const hash = token => createHash('sha256').update(token).digest();
@@ -100,7 +100,8 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
           processed = await image.rotate().resize({ width:1600,height:1600,fit:'inside',withoutEnlargement:true }).jpeg({quality:82}).toBuffer();
         }
         catch { throw fail(400,'写真を読み込めません。別の写真を選んでください。'); }
-        const provenance = await inspectProvenance(raw, mimeType);
+        // raw remains unchanged even though a separate public JPEG was made.
+        const provenance = await inspectImageProvenance(raw, mimeType, {consent:input.provenance_consent===true,request:provenanceRequest});
         let metadata = { status:'確認できない', warnings:[] };
         try {
           const exif = await exifr.parse(raw, ['DateTimeOriginal','Make','Model','Software','latitude','longitude']);
@@ -130,7 +131,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         }
         const post = { id, latitude:input.latitude, longitude:input.longitude, description:input.description.trim(), created_at:new Date().toISOString(), image_url:`/images/${id}.jpg`, image_storage:images.driver, gps:gpsResult(input,samples), metadata, provenance, streetview, ai:{status:'pending',result:'unknown',reason:'未検証・解析待ち'} };
         if (input.hazard_consent === true) post.hazard = pendingHazard();
-        try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true}); }
+        try { await store.create(post,{token_hash:hash(token).toString('hex'),gps_samples:samples,ai_consent:input.ai_consent===true,provenance_consent:input.provenance_consent===true}); }
         catch (e) {
           await images.delete(id).catch(()=>console.error('投稿失敗後の写真の削除に失敗しました。'));
           await Promise.all(streetviewVariants(streetview).map(v=>images.delete(id,v))).catch(()=>console.error('投稿失敗後のストリートビュー画像の削除に失敗しました。'));
@@ -196,7 +197,7 @@ export async function createApp(directory = path.join(root, 'data'), injectedSto
         catch(error){if(error.code==='ENOENT'||error.code===404)throw fail(404,'写真が見つかりません。');throw error;}
         res.writeHead(200,{'Content-Type':'image/jpeg'});res.end(req.method==='HEAD'?undefined:content);return;
       }
-      const staticFiles = { '/':'public/index.html', '/app.js':'public/app.js', '/lifecycle.js':'public/lifecycle.js', '/incidents.js':'public/incidents.js', '/style.css':'public/style.css', '/vendor/leaflet.js':'node_modules/leaflet/dist/leaflet.js', '/vendor/leaflet.css':'node_modules/leaflet/dist/leaflet.css' };
+      const staticFiles = { '/':'public/index.html', '/app.js':'public/app.js', '/provenance.js':'public/provenance.js', '/lifecycle.js':'public/lifecycle.js', '/incidents.js':'public/incidents.js', '/style.css':'public/style.css', '/vendor/leaflet.js':'node_modules/leaflet/dist/leaflet.js', '/vendor/leaflet.css':'node_modules/leaflet/dist/leaflet.css' };
       const file = staticFiles[url.pathname] ? path.join(root,staticFiles[url.pathname]) : null;
       if (!file) throw fail(404,'見つかりません。');
       const content = await readFile(file).catch(()=>{throw fail(404,'見つかりません。');});
